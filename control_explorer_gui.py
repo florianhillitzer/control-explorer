@@ -1265,6 +1265,49 @@ class ControlExplorerApp(tk.Tk):
     def _is_open_loop_selection(self, selected):
         return selected == self.SYSTEM_OPEN
 
+    def _count_origin_integrators(self, sys_rational, tol=1e-10):
+        """
+        Bestimmt die Anzahl der Netto-Integratoren im offenen Kreis.
+
+        Ein I-Anteil entspricht einem Pol im Ursprung. Falls im Zaehler ebenfalls
+        Nullstellen im Ursprung liegen, werden diese als algebraische Kuerzung
+        beruecksichtigt. Rueckgabe ist daher die Netto-Anzahl der Faktoren 1/s.
+        """
+        try:
+            num, den = self._tf_num_den_arrays(sys_rational)
+        except Exception:
+            return 0
+
+        def trailing_zero_count(coeffs):
+            coeffs = np.asarray(coeffs, dtype=float)
+            if coeffs.size == 0:
+                return 0
+            scale = max(1.0, float(np.nanmax(np.abs(coeffs))))
+            count = 0
+            for coeff in coeffs[::-1]:
+                if abs(coeff) <= tol * scale:
+                    count += 1
+                else:
+                    break
+            return count
+
+        zeros_at_origin = trailing_zero_count(num)
+        poles_at_origin = trailing_zero_count(den)
+        return max(0, poles_at_origin - zeros_at_origin)
+
+    def _integrator_margin_note(self, integrator_order):
+        if integrator_order <= 0:
+            return ""
+        if integrator_order == 1:
+            prefix = "I-Anteil erkannt: 1 Pol im Ursprung."
+        else:
+            prefix = f"I-Anteil erkannt: {integrator_order} Pole im Ursprung."
+        return (
+            prefix
+            + " Phasenreserve bleibt der Abstand zur -180°-Linie bei |G₀|=1; "
+            + "wegen Pol im Ursprung nicht als alleiniger Stabilitätsbeweis verwenden."
+        )
+
     def _rational_high_frequency_limit(self, sys_rational):
         """
         Grenzwert des rationalen Anteils fuer s -> infinity.
@@ -1493,7 +1536,7 @@ class ControlExplorerApp(tk.Tk):
             if active_tab == 0:
                 self._plot_nyquist(omega_out, H_freq, data["markers"])
             elif active_tab == 1:
-                self._plot_bode(omega_out, H_freq, L)
+                self._plot_bode(omega_out, H_freq, L, data["sys_rational"])
             elif active_tab == 2:
                 self._plot_step(sys_time, data["t"], data["step_amplitude"])
             else:
@@ -1710,6 +1753,11 @@ class ControlExplorerApp(tk.Tk):
         Berechnet Amplitudenreserve und Phasenreserve aus dem exakt ausgewerteten
         offenen Kreis L(jω). Das funktioniert auch für reine Totzeiten, weil hier
         direkt im Frequenzbereich gearbeitet wird.
+
+        Wichtig: Auch bei einem I-Anteil wird die Phasenreserve nicht gegen -90°,
+        sondern weiterhin als Abstand zur kritischen -180°-Linie am
+        Amplitudendurchtritt |L(jω_c)| = 1 bestimmt. Der I-Anteil verändert also
+        die Interpretation, nicht die Grundformel.
         """
         mask = np.asarray(omega) > 0
         w = np.asarray(omega, dtype=float)[mask]
@@ -1723,6 +1771,9 @@ class ControlExplorerApp(tk.Tk):
         phase_margin_candidates = []
         for wc in gain_crossings:
             phase_at_wc = self._interpolate_at_log_frequency(w, phase_deg, wc)
+            # Klassische Phasenreserve: Abstand der offenen Kreisphase zur
+            # kritischen -180°-Linie am Amplitudendurchtritt.
+            # Das gilt auch für offene Kreise mit I-Anteil.
             pm = 180.0 + phase_at_wc
             phase_margin_candidates.append(
                 {
@@ -1809,8 +1860,9 @@ class ControlExplorerApp(tk.Tk):
         )
 
 
-    def _plot_bode_margins(self, ax_mag, ax_phase, omega, L_open):
+    def _plot_bode_margins(self, ax_mag, ax_phase, omega, L_open, sys_rational=None):
         margins = self._compute_bode_margins_from_response(omega, L_open)
+        integrator_order = self._count_origin_integrators(sys_rational) if sys_rational is not None else 0
 
         ax_mag.axhline(0.0, linestyle=":", linewidth=1.0, color="black", label=r"$0\,\mathrm{dB}$")
         ax_phase.axhline(-180.0, linestyle=":", linewidth=1.0, color="black", label=r"$-180^\circ$")
@@ -1878,6 +1930,34 @@ class ControlExplorerApp(tk.Tk):
                 fontsize=9,
             )
 
+        note_y = 0.04
+        if pm is None:
+            ax_phase.text(
+                0.02,
+                note_y,
+                "\u03c6_R nicht definiert: kein 0-dB-Durchtritt von oben nach unten\n"
+                "im dargestellten Frequenzbereich gefunden.",
+                transform=ax_phase.transAxes,
+                fontsize=9,
+                va="bottom",
+                ha="left",
+                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+            )
+            note_y += 0.15
+
+        integrator_note = self._integrator_margin_note(integrator_order)
+        if integrator_note:
+            ax_phase.text(
+                0.02,
+                note_y,
+                integrator_note,
+                transform=ax_phase.transAxes,
+                fontsize=8.5,
+                va="bottom",
+                ha="left",
+                bbox={"boxstyle": "round,pad=0.35", "fc": "#fff7df", "ec": "#b8860b", "alpha": 0.92},
+            )
+
         if gm is None and pm is None:
             ax_mag.text(
                 0.02,
@@ -1890,7 +1970,7 @@ class ControlExplorerApp(tk.Tk):
                 bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
             )
 
-    def _plot_bode(self, omega, H, L_open=None):
+    def _plot_bode(self, omega, H, L_open=None, sys_rational=None):
         ax_mag = self.ax_mag
         ax_phase = self.ax_phase
 
@@ -1922,7 +2002,7 @@ class ControlExplorerApp(tk.Tk):
 
         if self.show_bode_margins_var.get():
             if self.bode_plot_system_var.get() == self.SYSTEM_OPEN and L_open is not None:
-                self._plot_bode_margins(ax_mag, ax_phase, omega, L_open)
+                self._plot_bode_margins(ax_mag, ax_phase, omega, L_open, sys_rational)
             else:
                 ax_mag.text(
                     0.02,
@@ -2186,6 +2266,20 @@ class ControlExplorerApp(tk.Tk):
                 "Bei der Darstellung des geschlossenen Kreises G=L/(1+L) oder der Sensitivität S=1/(1+L) "
                 "gibt es keinen entsprechenden endlichen kritischen Punkt; L=-1 bildet sich auf eine Polstelle/Unendlichkeit ab."
             )
+        text_lines.append("")
+
+        integrator_order = self._count_origin_integrators(data["sys_rational"])
+        text_lines.append("I-Anteil und Stabilitätsreserven:")
+        if integrator_order > 0:
+            text_lines.append(f"  Netto-I-Anteil erkannt: {integrator_order} Pol(e) im Ursprung.")
+            text_lines.append(
+                "  Die Phasenreserve wird weiterhin bei |G_0(jω_c)| = 1 als Abstand zur -180°-Linie berechnet; "
+                "sie wird also nicht gegen -90° gemessen. Wegen des Pols im Ursprung ist der offene Kreis "
+                "nicht asymptotisch stabil; die Reserve ist deshalb ein Entwurfs-/Robustheitsmaß, aber kein "
+                "alleiniger Stabilitätsbeweis. Für Stabilität zusätzlich Nyquist/geschlossene Pole prüfen."
+            )
+        else:
+            text_lines.append("  Kein Netto-I-Anteil im rationalen offenen Kreis erkannt.")
         text_lines.append("")
 
         # A few characteristic values for the open loop G_0(j omega)
