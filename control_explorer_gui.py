@@ -845,6 +845,15 @@ class ControlExplorerApp(tk.Tk):
         setter(new_lower, new_upper)
 
     def _register_hover(self, ax, kind, x, y, **extra):
+        """
+        Registriert Hover-Daten für eine Achse.
+
+        Wichtig: Hover-Annotationen werden bewusst ohne Pfeil gezeichnet.
+        Matplotlib kann bei schnell bewegten Annotationen mit Pfeil und sehr
+        nahe/ungültigen Punkten intern in split_path_inout(...) einen
+        StopIteration-Fehler werfen. Ohne Pfeil bleibt die Box stabil,
+        schnell und wird weiterhin dynamisch neben dem Datenpunkt positioniert.
+        """
         annotation = ax.annotate(
             "",
             xy=(0, 0),
@@ -862,14 +871,14 @@ class ControlExplorerApp(tk.Tk):
             annotation.get_bbox_patch().set_clip_on(False)
         if annotation.arrow_patch is not None:
             annotation.arrow_patch.set_clip_on(False)
+
         self._hover_annotations[ax] = annotation
         self._hover_data[ax] = {
             "kind": kind,
-            "x": np.asarray(x),
-            "y": np.asarray(y),
+            "x": np.asarray(x, dtype=float),
+            "y": np.asarray(y, dtype=float),
             **extra,
         }
-
     def _cache_hover_backgrounds(self, event):
         canvas = event.canvas
         for ax in canvas.figure.axes:
@@ -880,26 +889,38 @@ class ControlExplorerApp(tk.Tk):
         """
         Zeichnet Hover-Annotationen performant per Blitting.
 
-        Wichtig: Die Hover-Box wird vorher so positioniert, dass sie innerhalb
-        der Achsenfläche liegt. Dadurch kann weiterhin schnell gegen ax.bbox
-        geblittet werden, ohne dass die Box am Rand abgeschnitten wird.
+        Falls Matplotlib beim Zeichnen einer Annotation intern scheitert
+        (z. B. StopIteration in der Pfeil-/Connection-Logik), wird der Fehler
+        abgefangen und auf ein normales draw_idle() zurückgefallen. Dadurch
+        stürzt der Tkinter-Callback nicht ab und das Hover-Tool bleibt nutzbar.
         """
         for ax in set(axes):
             canvas = ax.figure.canvas
             background = self._hover_backgrounds.get(ax)
+            annotation = self._hover_annotations.get(ax)
 
             if background is None:
                 canvas.draw_idle()
                 continue
 
-            canvas.restore_region(background)
-            annotation = self._hover_annotations.get(ax)
+            try:
+                canvas.restore_region(background)
 
-            if annotation is not None and annotation.get_visible():
-                ax.draw_artist(annotation)
+                if annotation is not None and annotation.get_visible():
+                    ax.draw_artist(annotation)
 
-            canvas.blit(ax.bbox)
+                canvas.blit(ax.bbox)
 
+            except Exception:
+                # Robuster Fallback: keine Exception aus Tkinter-Callbacks herauslassen.
+                # Falls doch irgendwo ein Pfeil existiert, wird er deaktiviert und die
+                # komplette Figure neu gezeichnet.
+                try:
+                    if annotation is not None and annotation.arrow_patch is not None:
+                        annotation.arrow_patch.set_visible(False)
+                except Exception:
+                    pass
+                canvas.draw_idle()
 
     def _position_hover_annotation(self, ax, annotation, x_value, y_value):
         """
@@ -1562,14 +1583,33 @@ class ControlExplorerApp(tk.Tk):
         selected = self.nyquist_plot_system_var.get()
         normalized = self.normalized_nyquist_var.get()
 
-        plot_H = H
+        omega = np.asarray(omega, dtype=float)
+        H = np.asarray(H, dtype=complex)
+
+        finite_mask = np.isfinite(omega) & np.isfinite(H.real) & np.isfinite(H.imag)
+        if not np.any(finite_mask):
+            raise ValueError(
+                "Die Nyquist-Ortskurve enthält im dargestellten Bereich keine endlichen Punkte. "
+                "Prüfe Frequenzbereich und Systemeingabe."
+            )
+
+        plot_H_full = H.copy()
         scale = 1.0
         if normalized:
-            scale = np.max(np.abs(H))
-            if scale > np.finfo(float).tiny:
-                plot_H = H / scale
-            else:
+            finite_abs = np.abs(H[finite_mask])
+            finite_abs = finite_abs[np.isfinite(finite_abs)]
+            if finite_abs.size:
+                scale = float(np.max(finite_abs))
+            if not np.isfinite(scale) or scale <= np.finfo(float).tiny:
                 scale = 1.0
+            plot_H_full = H / scale
+
+        # Nicht-endliche Punkte treten z. B. bei I-Anteil an ω=0 auf.
+        # Sie dürfen nicht für Marker/Hover verwendet werden, sonst kann Matplotlib
+        # beim Zeichnen der Hover-Annotation intern scheitern.
+        plot_omega = omega[finite_mask]
+        plot_H = plot_H_full[finite_mask]
+        omitted_points = int(np.count_nonzero(~finite_mask))
 
         label = selected
         ax.plot(plot_H.real, plot_H.imag, linewidth=2, label=label)
@@ -1591,31 +1631,33 @@ class ControlExplorerApp(tk.Tk):
             critical_label = r"kritischer Punkt $-1$"
             ax.plot(critical_point, 0, "rx", markersize=10, label=critical_label)
 
-        # Start/end markers
-        start_label = r"$\omega=0$" #if normalized else "_nolegend_"
-        end_label = r"$\omega\to\infty$" #if normalized else "_nolegend_"
+        # Start/end markers: bei I-Anteil ist der echte Start bei ω=0 oft unendlich
+        # und deshalb nicht plottbar. Dann markieren wir den ersten endlichen Punkt.
+        first_is_zero = np.isclose(plot_omega[0], 0.0, rtol=0.0, atol=1e-14)
+        start_label = r"$\omega=0$" if first_is_zero else rf"$\omega={plot_omega[0]:.3g}$"
+        end_label = r"$\omega\to\infty$"
         ax.plot(plot_H.real[0], plot_H.imag[0], "o", markersize=7, label=start_label)
         ax.plot(plot_H.real[-1], plot_H.imag[-1], "d", markersize=6, label=end_label)
 
         # User-selected omega markers
         used_marker_indices = {0, len(plot_H) - 1} if normalized else set()
         for w_mark in markers:
-            idx = int(np.argmin(np.abs(omega - w_mark)))
+            idx = int(np.argmin(np.abs(plot_omega - w_mark)))
             if idx in used_marker_indices:
                 continue
             used_marker_indices.add(idx)
-            marker_label = rf"$\omega={omega[idx]:.3g}$"
+            marker_label = rf"$\omega={plot_omega[idx]:.3g}$"
             ax.plot(plot_H.real[idx], plot_H.imag[idx], "s", markersize=7, label=marker_label)
             if not normalized:
                 ax.annotate(
-                    rf"$\omega={omega[idx]:.3g}$",
+                    rf"$\omega={plot_omega[idx]:.3g}$",
                     (plot_H.real[idx], plot_H.imag[idx]),
                     textcoords="offset points",
                     xytext=(7, 7),
                     fontsize=9,
                 )
 
-        self._draw_direction_markers(ax, plot_H, omega)
+        self._draw_direction_markers(ax, plot_H, plot_omega)
 
         ax.axhline(0, color="black", linewidth=0.8)
         ax.axvline(0, color="black", linewidth=0.8)
@@ -1629,6 +1671,17 @@ class ControlExplorerApp(tk.Tk):
             ax.grid(self.grid_var.get())
             ax.set_xlabel(r"$\Re\{H(j\omega)\}$")
             ax.set_ylabel(r"$\Im\{H(j\omega)\}$")
+            if omitted_points:
+                ax.text(
+                    0.02,
+                    0.98,
+                    f"{omitted_points} nicht-endliche Punkte ausgelassen",
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    fontsize=8,
+                    bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": "#aaaaaa", "alpha": 0.85},
+                )
 
         if self.equal_axis_var.get():
             ax.axis("equal")
@@ -1649,11 +1702,10 @@ class ControlExplorerApp(tk.Tk):
                 annotation.set_visible(False)
             self._hover_backgrounds.pop(ax, None)
         else:
-            self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(omega))
+            self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(plot_omega))
 
         self.fig_nyquist.tight_layout()
         self.canvas_nyquist.draw_idle()
-
     def _draw_direction_markers(self, ax, H, omega):
         n = len(H)
         if n < 30:
