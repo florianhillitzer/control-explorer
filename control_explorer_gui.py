@@ -54,7 +54,9 @@ class ControlExplorerApp(tk.Tk):
         "step_amplitude": "1",
         "pade_order": "6",
         "marker_omega": "0, 1",
-        "plot_system": SYSTEM_OPEN,
+        "nyquist_plot_system": SYSTEM_OPEN,
+        "bode_plot_system": SYSTEM_OPEN,
+        "step_plot_system": SYSTEM_CLOSED,
         "auto_update": True,
         "grid": True,
         "equal_axis": True,
@@ -198,7 +200,9 @@ class ControlExplorerApp(tk.Tk):
         self.pade_order_var = tk.StringVar(value=defaults["pade_order"])
         self.marker_omega_var = tk.StringVar(value=defaults["marker_omega"])
 
-        self.plot_system_var = tk.StringVar(value=defaults["plot_system"])
+        self.nyquist_plot_system_var = tk.StringVar(value=defaults["nyquist_plot_system"])
+        self.bode_plot_system_var = tk.StringVar(value=defaults["bode_plot_system"])
+        self.step_plot_system_var = tk.StringVar(value=defaults["step_plot_system"])
         self.auto_update_var = tk.BooleanVar(value=defaults["auto_update"])
         self.grid_var = tk.BooleanVar(value=defaults["grid"])
         self.equal_axis_var = tk.BooleanVar(value=defaults["equal_axis"])
@@ -219,7 +223,9 @@ class ControlExplorerApp(tk.Tk):
             "step_amplitude": self.step_amplitude_var,
             "pade_order": self.pade_order_var,
             "marker_omega": self.marker_omega_var,
-            "plot_system": self.plot_system_var,
+            "nyquist_plot_system": self.nyquist_plot_system_var,
+            "bode_plot_system": self.bode_plot_system_var,
+            "step_plot_system": self.step_plot_system_var,
             "auto_update": self.auto_update_var,
             "grid": self.grid_var,
             "equal_axis": self.equal_axis_var,
@@ -357,20 +363,21 @@ class ControlExplorerApp(tk.Tk):
             self._settings_window = None
 
     def _create_general_settings(self, parent):
-        plot_frame = ttk.Frame(parent)
-        plot_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        plot_frame.columnconfigure(1, weight=1)
-        ttk.Label(plot_frame, text="Plot-System").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Combobox(
-            plot_frame,
-            textvariable=self.plot_system_var,
-            values=[self.SYSTEM_OPEN, self.SYSTEM_CLOSED, self.SYSTEM_SENS],
-            state="readonly",
-        ).grid(row=0, column=1, sticky="ew")
-
-        ttk.Checkbutton(parent, text="Auto-Update", variable=self.auto_update_var, command=self.schedule_update).grid(row=1, column=0, sticky="w", pady=3)
-        ttk.Checkbutton(parent, text="Grid anzeigen", variable=self.grid_var, command=self.schedule_update).grid(row=2, column=0, sticky="w", pady=3)
-        ttk.Button(parent, text="SISO Tool öffnen", command=self.open_sisotool).grid(row=3, column=0, sticky="w", pady=(12, 0))
+        ttk.Checkbutton(
+            parent,
+            text="Auto-Update",
+            variable=self.auto_update_var,
+            command=self.schedule_update,
+        ).grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(
+            parent,
+            text="Grid anzeigen",
+            variable=self.grid_var,
+            command=self.schedule_update,
+        ).grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Button(parent, text="SISO Tool öffnen", command=self.open_sisotool).grid(
+            row=2, column=0, sticky="w", pady=(12, 0)
+        )
 
     def _create_frequency_settings(self, parent):
         range_box = ttk.LabelFrame(parent, text="Berechnungsbereich der Ortskurve")
@@ -516,6 +523,34 @@ class ControlExplorerApp(tk.Tk):
         )
         ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=8, column=0, sticky="w", pady=(4, 0))
 
+    def _create_tab_plot_system_selector(self, parent, variable, hint_text=None):
+        """
+        Erstellt eine kompakte Systemauswahl direkt im jeweiligen Hauptfenster-Tab.
+        Jede Registerkarte besitzt damit ihre eigene Auswahl.
+        """
+        selector_frame = ttk.Frame(parent, padding=(0, 0, 0, 4))
+        selector_frame.pack(side=tk.TOP, fill=tk.X)
+
+        ttk.Label(selector_frame, text="Angezeigtes System:").pack(side=tk.LEFT, padx=(0, 6))
+        combo = ttk.Combobox(
+            selector_frame,
+            textvariable=variable,
+            values=[self.SYSTEM_OPEN, self.SYSTEM_CLOSED, self.SYSTEM_SENS],
+            state="readonly",
+            width=28,
+            takefocus=False,
+        )
+        combo.pack(side=tk.LEFT)
+
+        if hint_text:
+            ttk.Label(
+                selector_frame,
+                text=hint_text,
+                foreground="#555555",
+            ).pack(side=tk.LEFT, padx=(10, 0))
+
+        return combo
+
     def _create_right_panel(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
@@ -532,6 +567,22 @@ class ControlExplorerApp(tk.Tk):
         self.notebook.add(self.tab_bode, text="Frequenzgang / Bode")
         self.notebook.add(self.tab_step, text="Sprungantwort")
         self.notebook.add(self.tab_info, text="Info")
+
+        self._create_tab_plot_system_selector(
+            self.tab_nyquist,
+            self.nyquist_plot_system_var,
+            "Standard: offener Kreis",
+        )
+        self._create_tab_plot_system_selector(
+            self.tab_bode,
+            self.bode_plot_system_var,
+            "Standard: offener Kreis",
+        )
+        self._create_tab_plot_system_selector(
+            self.tab_step,
+            self.step_plot_system_var,
+            "Standard: geschlossener Kreis",
+        )
 
         self.fig_nyquist = Figure(figsize=(7, 6), dpi=100)
         self.ax_nyquist = self.fig_nyquist.add_subplot(111)
@@ -1067,8 +1118,7 @@ class ControlExplorerApp(tk.Tk):
         L = response * delay_response
         return omega_out, L
 
-    def _selected_frequency_system(self, L):
-        selected = self.plot_system_var.get()
+    def _selected_frequency_system(self, L, selected):
         if selected == self.SYSTEM_OPEN:
             return L
         if selected == self.SYSTEM_CLOSED:
@@ -1077,7 +1127,7 @@ class ControlExplorerApp(tk.Tk):
             return 1.0 / (1.0 + L)
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
-    def _time_domain_system_with_pade(self, sys_rational, delay, pade_order):
+    def _time_domain_system_with_pade(self, sys_rational, delay, pade_order, selected):
         if delay > 0 and pade_order > 0:
             num_delay, den_delay = self._call_control("pade", ct.pade, delay, pade_order)
             delay_tf = self._call_control("tf fuer Pade-Totzeit", ct.tf, num_delay, den_delay)
@@ -1085,7 +1135,6 @@ class ControlExplorerApp(tk.Tk):
         else:
             L_time = sys_rational
 
-        selected = self.plot_system_var.get()
         if selected == self.SYSTEM_OPEN:
             return L_time
         if selected == self.SYSTEM_CLOSED:
@@ -1179,17 +1228,31 @@ class ControlExplorerApp(tk.Tk):
             self._update_latex_preview(data)
             active_tab = self.notebook.index(self.notebook.select())
 
-            if active_tab in (0, 3):
-                omega_out, L = self._frequency_response_exact_delay(data["sys_rational"], data["omega"], data["delay"])
-                H_freq = self._selected_frequency_system(L)
+            if active_tab == 0:
+                omega_out, L = self._frequency_response_exact_delay(
+                    data["sys_rational"], data["omega"], data["delay"]
+                )
+                H_freq = self._selected_frequency_system(L, self.nyquist_plot_system_var.get())
             elif active_tab == 1:
-                omega_out, L = self._frequency_response_exact_delay(data["sys_rational"], data["bode_omega"], data["delay"])
-                H_freq = self._selected_frequency_system(L)
+                omega_out, L = self._frequency_response_exact_delay(
+                    data["sys_rational"], data["bode_omega"], data["delay"]
+                )
+                H_freq = self._selected_frequency_system(L, self.bode_plot_system_var.get())
+            elif active_tab == 3:
+                omega_out, L = self._frequency_response_exact_delay(
+                    data["sys_rational"], data["omega"], data["delay"]
+                )
+                H_freq = self._selected_frequency_system(L, self.nyquist_plot_system_var.get())
             else:
                 omega_out = L = H_freq = None
 
             if active_tab in (2, 3):
-                sys_time = self._time_domain_system_with_pade(data["sys_rational"], data["delay"], data["pade_order"])
+                sys_time = self._time_domain_system_with_pade(
+                    data["sys_rational"],
+                    data["delay"],
+                    data["pade_order"],
+                    self.step_plot_system_var.get(),
+                )
             else:
                 sys_time = None
 
@@ -1226,7 +1289,7 @@ class ControlExplorerApp(tk.Tk):
             if scale > np.finfo(float).tiny:
                 plot_H = H / scale
 
-        label = self.plot_system_var.get()
+        label = self.nyquist_plot_system_var.get()
         ax.plot(plot_H.real, plot_H.imag, linewidth=2, label=label)
 
         if self.show_negative_freq_var.get():
@@ -1331,7 +1394,7 @@ class ControlExplorerApp(tk.Tk):
 
         ax_mag.semilogx(w, mag_db, linewidth=2)
         ax_mag.set_ylabel(r"$|H(j\omega)|$ [dB]")
-        ax_mag.set_title("Frequenzgang / Bode")
+        ax_mag.set_title(f"Frequenzgang / Bode - {self.bode_plot_system_var.get()}")
         ax_mag.grid(self.grid_var.get(), which="both")
 
         ax_phase.semilogx(w, phase_deg, linewidth=2)
@@ -1450,7 +1513,7 @@ class ControlExplorerApp(tk.Tk):
 
         ax.set_xlabel(r"$t$ [s]")
         ax.set_ylabel(r"$y(t)$")
-        ax.set_title("Sprungantwort")
+        ax.set_title(f"Sprungantwort - {self.step_plot_system_var.get()}")
         ax.grid(self.grid_var.get())
         if ax.lines:
             ax.legend(loc="best")
@@ -1464,7 +1527,9 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append("Aktuelle Auswertung")
         text_lines.append("=" * 72)
         text_lines.append("")
-        text_lines.append(f"Plot-System: {self.plot_system_var.get()}")
+        text_lines.append(f"Nyquist-System: {self.nyquist_plot_system_var.get()}")
+        text_lines.append(f"Bode-System: {self.bode_plot_system_var.get()}")
+        text_lines.append(f"Sprungantwort-System: {self.step_plot_system_var.get()}")
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
         text_lines.append(f"Sprungfaktor: {data['step_amplitude']:.8g}")
         text_lines.append(f"Padé-Ordnung für Zeitbereich: {data['pade_order']}")
@@ -1486,7 +1551,7 @@ class ControlExplorerApp(tk.Tk):
             )
 
         text_lines.append("")
-        text_lines.append("Für den Zeitbereich verwendetes rationales System:")
+        text_lines.append("Für die Sprungantwort verwendetes rationales System:")
         text_lines.append(str(sys_time))
         text_lines.append("")
 
