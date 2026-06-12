@@ -523,15 +523,15 @@ class ControlExplorerApp(tk.Tk):
             "# T1 = 1.0\n"
             "# Kp = 1.5\n"
         )
-        ttk.Label(parent, text="Übertragungsfunktionen").grid(row=5, column=0, sticky="w")
+        ttk.Label(parent, text="Übertragungsfunktionen").grid(row=6, column=0, sticky="w")
         self.fig_latex = Figure(figsize=(4.8, 1.65), dpi=100)
         self.ax_latex = self.fig_latex.add_subplot(111)
         self.ax_latex.axis("off")
         self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
-        self.canvas_latex.get_tk_widget().grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        self.canvas_latex.get_tk_widget().grid(row=7, column=0, sticky="ew", pady=(0, 8))
 
         delay_frame = ttk.Frame(parent)
-        delay_frame.grid(row=7, column=0, sticky="ew", pady=(0, 8))
+        delay_frame.grid(row=5, column=0, sticky="ew", pady=(0, 8))
         delay_frame.columnconfigure(1, weight=1)
         ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.delay_var = tk.StringVar(value="T_t")
