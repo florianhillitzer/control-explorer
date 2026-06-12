@@ -1,0 +1,948 @@
+
+import tkinter as tk
+from tkinter import messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
+import traceback
+import warnings
+
+import numpy as np
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
+import control as ct
+
+
+class ControlExplorerApp(tk.Tk):
+    """
+    Tkinter GUI for interactive analysis of SISO transfer functions with python-control.
+
+    Main idea:
+    - Enter parameters as Python statements, e.g. K_R = 2.0, T_t = np.pi/4
+    - Enter a rational transfer function expression using s, e.g.
+          K_R / (s**3 + 3*s**2 + 3*s + 1)
+    - Enter an optional exact delay for frequency-domain plots, e.g. T_t
+    - Nyquist/Bode use exact delay e^{-j omega T_t}
+    - Step response uses a Pade approximation of the delay
+    """
+
+    SYSTEM_OPEN = r"Offener Kreis G_0(s)"
+    SYSTEM_CLOSED = r"Geschlossener Kreis G(s)"
+    SYSTEM_SENS = "Sensitivitaet S(s)"
+
+    def __init__(self):
+        super().__init__()
+
+        self.title("Control Explorer - Nyquist, Bode, Sprungantwort")
+        self.geometry("1300x820")
+        self.minsize(1050, 650)
+
+        self._after_id = None
+        self._is_updating = False
+        self._settings_window = None
+        self._last_warning_text = ""
+        self._control_warnings = []
+
+        self._create_variables()
+        self._create_menu()
+        self._create_layout()
+        self._bind_events()
+
+        self.schedule_update()
+
+    # ------------------------------------------------------------------
+    # GUI construction
+    # ------------------------------------------------------------------
+    def _create_variables(self):
+        self.omega_min_var = tk.StringVar(value="0")
+        self.omega_max_var = tk.StringVar(value="30")
+        self.n_points_var = tk.StringVar(value="6000")
+
+        self.t_max_var = tk.StringVar(value="20")
+        self.t_points_var = tk.StringVar(value="2000")
+
+        self.pade_order_var = tk.StringVar(value="6")
+        self.marker_omega_var = tk.StringVar(value="0, 1")
+
+        self.plot_system_var = tk.StringVar(value=self.SYSTEM_OPEN)
+        self.auto_update_var = tk.BooleanVar(value=True)
+        self.grid_var = tk.BooleanVar(value=True)
+        self.equal_axis_var = tk.BooleanVar(value=True)
+        self.show_negative_freq_var = tk.BooleanVar(value=False)
+        self.show_critical_point_var = tk.BooleanVar(value=True)
+        self.normalized_nyquist_var = tk.BooleanVar(value=False)
+        self.direction_arrow_count_var = tk.StringVar(value="4")
+        self.direction_arrow_positions_var = tk.StringVar(value="1, 5, 10, 20")
+
+    def _create_menu(self):
+        menu_bar = tk.Menu(self)
+
+        settings_menu = tk.Menu(menu_bar, tearoff=False)
+        settings_menu.add_command(label="Einstellungen öffnen...", command=self._open_settings_window)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="SISO Tool öffnen", command=self.open_sisotool)
+
+        menu_bar.add_cascade(label="Einstellungen", menu=settings_menu)
+        self.config(menu=menu_bar)
+
+    def _open_direction_arrow_settings(self):
+        self._open_settings_window()
+
+    def _open_settings_window(self):
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.lift()
+            self._settings_window.focus_force()
+            return
+
+        dialog = tk.Toplevel(self)
+        self._settings_window = dialog
+        dialog.title("Einstellungen")
+        dialog.transient(self)
+        dialog.geometry("430x360")
+        dialog.minsize(390, 320)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._close_settings_window(dialog))
+
+        notebook = ttk.Notebook(dialog)
+        notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        tab_general = ttk.Frame(notebook, padding=10)
+        tab_freq = ttk.Frame(notebook, padding=10)
+        tab_step = ttk.Frame(notebook, padding=10)
+        tab_nyquist = ttk.Frame(notebook, padding=10)
+
+        notebook.add(tab_general, text="Allgemein")
+        notebook.add(tab_freq, text="Frequenz")
+        notebook.add(tab_step, text="Sprung")
+        notebook.add(tab_nyquist, text="Ortskurve")
+
+        for tab in (tab_general, tab_freq, tab_step, tab_nyquist):
+            tab.columnconfigure(0, weight=1)
+
+        self._create_general_settings(tab_general)
+        self._create_frequency_settings(tab_freq)
+        self._create_step_settings(tab_step)
+        self._create_nyquist_settings(tab_nyquist)
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        button_frame.columnconfigure(0, weight=1)
+        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="w")
+        ttk.Button(button_frame, text="Schliessen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=1, sticky="e")
+
+    def _close_settings_window(self, dialog):
+        if dialog.winfo_exists():
+            dialog.destroy()
+        if self._settings_window is dialog:
+            self._settings_window = None
+
+    def _create_general_settings(self, parent):
+        plot_frame = ttk.Frame(parent)
+        plot_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        plot_frame.columnconfigure(1, weight=1)
+        ttk.Label(plot_frame, text="Plot-System").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Combobox(
+            plot_frame,
+            textvariable=self.plot_system_var,
+            values=[self.SYSTEM_OPEN, self.SYSTEM_CLOSED, self.SYSTEM_SENS],
+            state="readonly",
+        ).grid(row=0, column=1, sticky="ew")
+
+        ttk.Checkbutton(parent, text="Auto-Update", variable=self.auto_update_var, command=self.schedule_update).grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="Grid anzeigen", variable=self.grid_var, command=self.schedule_update).grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Button(parent, text="SISO Tool öffnen", command=self.open_sisotool).grid(row=3, column=0, sticky="w", pady=(12, 0))
+
+    def _create_frequency_settings(self, parent):
+        self._add_entry(parent, "omega_min", self.omega_min_var, 0, 0)
+        self._add_entry(parent, "omega_max", self.omega_max_var, 1, 0)
+        self._add_entry(parent, "Punkte", self.n_points_var, 2, 0)
+
+        marker_frame = ttk.Frame(parent)
+        marker_frame.grid(row=3, column=0, sticky="ew", padx=6, pady=3)
+        marker_frame.columnconfigure(1, weight=1)
+        ttk.Label(marker_frame, text="Marker-omega").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(marker_frame, textvariable=self.marker_omega_var).grid(row=0, column=1, sticky="ew")
+
+    def _create_step_settings(self, parent):
+        self._add_entry(parent, "t_max", self.t_max_var, 0, 0)
+        self._add_entry(parent, "Punkte", self.t_points_var, 1, 0)
+        self._add_entry(parent, "Pade-Ordnung", self.pade_order_var, 2, 0)
+
+    def _create_nyquist_settings(self, parent):
+        ttk.Checkbutton(parent, text="axis equal", variable=self.equal_axis_var, command=self.schedule_update).grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="negative Frequenzen spiegeln", variable=self.show_negative_freq_var, command=self.schedule_update).grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="kritischen Punkt -1 zeigen", variable=self.show_critical_point_var, command=self.schedule_update).grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="normierte Ortskurve ohne Zahlen/Raster", variable=self.normalized_nyquist_var, command=self.schedule_update).grid(row=3, column=0, sticky="w", pady=3)
+
+        arrow_frame = ttk.LabelFrame(parent, text="Richtungspfeile")
+        arrow_frame.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        arrow_frame.columnconfigure(1, weight=1)
+        ttk.Label(arrow_frame, text="Anzahl").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(arrow_frame, textvariable=self.direction_arrow_count_var, width=8).grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(arrow_frame, text="omega-Werte").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(arrow_frame, textvariable=self.direction_arrow_positions_var).grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+
+    def _create_layout(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        paned.grid(row=0, column=0, sticky="nsew")
+
+        left = ttk.Frame(paned, padding=8)
+        right = ttk.Frame(paned, padding=6)
+
+        paned.add(left, weight=0)
+        paned.add(right, weight=1)
+
+        self._create_left_panel(left)
+        self._create_right_panel(right)
+
+        self.status_var = tk.StringVar(value="Bereit.")
+        status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN, padding=(6, 3))
+        status.grid(row=1, column=0, sticky="ew")
+
+    def _create_left_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+
+        title = ttk.Label(parent, text="Eingaben", font=("Segoe UI", 12, "bold"))
+        title.grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        ttk.Label(parent, text="Parametercode").grid(row=1, column=0, sticky="w")
+        self.params_text = ScrolledText(parent, height=7, width=48, wrap=tk.NONE)
+        self.params_text.grid(row=2, column=0, sticky="nsew", pady=(2, 8))
+        self.params_text.insert(
+            "1.0",
+            "K_R = 2.0\n"
+            "T_t = np.pi / 4\n"
+            "\n"
+            "# Beispiele:\n"
+            "# T1 = 1.0\n"
+            "# Kp = 1.5\n"
+        )
+
+        ttk.Label(parent, text="Rationaler Anteil G_0,rational(s)").grid(row=3, column=0, sticky="w")
+        self.system_text = ScrolledText(parent, height=5, width=48, wrap=tk.WORD)
+        self.system_text.grid(row=4, column=0, sticky="nsew", pady=(2, 8))
+        self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
+
+        self.fig_latex = Figure(figsize=(4.6, 0.75), dpi=100)
+        self.ax_latex = self.fig_latex.add_subplot(111)
+        self.ax_latex.axis("off")
+        self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
+        self.canvas_latex.get_tk_widget().grid(row=5, column=0, sticky="ew", pady=(0, 8))
+
+        delay_frame = ttk.Frame(parent)
+        delay_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        delay_frame.columnconfigure(1, weight=1)
+        ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.delay_var = tk.StringVar(value="T_t")
+        ttk.Entry(delay_frame, textvariable=self.delay_var).grid(row=0, column=1, sticky="ew")
+
+        button_frame = ttk.Frame(parent)
+        button_frame.grid(row=7, column=0, sticky="ew", pady=(4, 8))
+        button_frame.columnconfigure(0, weight=1)
+        button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
+
+        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(button_frame, text="Einstellungen", command=self._open_settings_window).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(button_frame, text="Beispiel laden", command=self.load_default_example).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+
+        help_text = (
+            "Eingabehinweise:\n"
+            "- s ist als ct.TransferFunction.s definiert.\n"
+            "- Parameter koennen im oberen Feld definiert werden.\n"
+            "- Frequenzplots nutzen die Totzeit exakt.\n"
+            "- Sprungantworten nutzen Pade fuer die Totzeit.\n"
+            "- Frequenzbereich, Sprungantwort und Optionen liegen im Einstellungsfenster."
+        )
+        ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=8, column=0, sticky="w", pady=(4, 0))
+
+    def _create_right_panel(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        self.notebook = ttk.Notebook(parent)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
+
+        self.tab_nyquist = ttk.Frame(self.notebook)
+        self.tab_bode = ttk.Frame(self.notebook)
+        self.tab_step = ttk.Frame(self.notebook)
+        self.tab_info = ttk.Frame(self.notebook)
+
+        self.notebook.add(self.tab_nyquist, text="Nyquist / Ortskurve")
+        self.notebook.add(self.tab_bode, text="Frequenzgang / Bode")
+        self.notebook.add(self.tab_step, text="Sprungantwort")
+        self.notebook.add(self.tab_info, text="Info")
+
+        self.fig_nyquist = Figure(figsize=(7, 6), dpi=100)
+        self.ax_nyquist = self.fig_nyquist.add_subplot(111)
+        self.canvas_nyquist = self._embed_figure(self.tab_nyquist, self.fig_nyquist)
+
+        self.fig_bode = Figure(figsize=(7, 6), dpi=100)
+        self.ax_mag = self.fig_bode.add_subplot(211)
+        self.ax_phase = self.fig_bode.add_subplot(212)
+        self.canvas_bode = self._embed_figure(self.tab_bode, self.fig_bode)
+
+        self.fig_step = Figure(figsize=(7, 6), dpi=100)
+        self.ax_step = self.fig_step.add_subplot(111)
+        self.canvas_step = self._embed_figure(self.tab_step, self.fig_step)
+
+        self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
+        self.info_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.info_text.configure(state=tk.DISABLED)
+
+    def _embed_figure(self, parent, fig):
+        canvas = FigureCanvasTkAgg(fig, master=parent)
+        toolbar = NavigationToolbar2Tk(canvas, parent, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        return canvas
+
+    def _add_entry(self, parent, label, variable, row, col):
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=col, sticky="ew", padx=6, pady=3)
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text=label).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(frame, textvariable=variable, width=14).grid(row=0, column=1, sticky="ew")
+
+    def _bind_events(self):
+        variables = [
+            self.omega_min_var,
+            self.omega_max_var,
+            self.n_points_var,
+            self.t_max_var,
+            self.t_points_var,
+            self.pade_order_var,
+            self.marker_omega_var,
+            self.delay_var,
+            self.plot_system_var,
+            self.direction_arrow_count_var,
+            self.direction_arrow_positions_var,
+            self.auto_update_var,
+            self.grid_var,
+            self.equal_axis_var,
+            self.show_negative_freq_var,
+            self.show_critical_point_var,
+            self.normalized_nyquist_var,
+        ]
+        for var in variables:
+            var.trace_add("write", lambda *_: self.schedule_update())
+
+        self.params_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
+        self.system_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
+
+        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.schedule_update())
+
+    # ------------------------------------------------------------------
+    # Parsing and computation
+    # ------------------------------------------------------------------
+    def _base_eval_environment(self):
+        s = ct.TransferFunction.s
+
+        env = {
+            "__builtins__": {},
+            "np": np,
+            "ct": ct,
+            "s": s,
+            "tf": ct.tf,
+            "zpk": ct.zpk,
+            "ss": ct.ss,
+            "pi": np.pi,
+            "e": np.e,
+            "sqrt": np.sqrt,
+            "sin": np.sin,
+            "cos": np.cos,
+            "tan": np.tan,
+            "exp": np.exp,
+            "log": np.log,
+            "log10": np.log10,
+            "abs": abs,
+        }
+        return env
+
+    def _parse_user_input(self):
+        env = self._base_eval_environment()
+
+        params_code = self.params_text.get("1.0", tk.END).strip()
+        system_expr = self.system_text.get("1.0", tk.END).strip()
+        delay_expr = self.delay_var.get().strip() or "0"
+
+        if params_code:
+            exec(params_code, env, env)
+
+        if not system_expr:
+            raise ValueError("Es wurde keine Übertragungsfunktion eingegeben.")
+
+        sys_rational = eval(system_expr, env, env)
+        sys_rational = self._ensure_lti(sys_rational)
+
+        delay = float(eval(delay_expr, env, env))
+        if delay < 0:
+            raise ValueError("Die Totzeit muss >= 0 sein.")
+
+        omega_min = float(eval(self.omega_min_var.get(), env, env))
+        omega_max = float(eval(self.omega_max_var.get(), env, env))
+        n_points = int(float(eval(self.n_points_var.get(), env, env)))
+
+        t_max = float(eval(self.t_max_var.get(), env, env))
+        t_points = int(float(eval(self.t_points_var.get(), env, env)))
+
+        pade_order = int(float(eval(self.pade_order_var.get(), env, env)))
+
+        if omega_max <= omega_min:
+            raise ValueError("ω_max muss größer als ω_min sein.")
+        if n_points < 10:
+            raise ValueError("Die Anzahl der Frequenzpunkte muss mindestens 10 sein.")
+        if t_max <= 0:
+            raise ValueError("t_max muss > 0 sein.")
+        if t_points < 10:
+            raise ValueError("Die Anzahl der Zeitpunkte muss mindestens 10 sein.")
+        if pade_order < 0:
+            raise ValueError("Die Padé-Ordnung muss >= 0 sein.")
+
+        omega = np.linspace(omega_min, omega_max, n_points)
+        t = np.linspace(0.0, t_max, t_points)
+
+        markers = self._parse_marker_frequencies(env)
+
+        return {
+            "env": env,
+            "params_code": params_code,
+            "system_expr": system_expr,
+            "sys_rational": sys_rational,
+            "delay": delay,
+            "omega": omega,
+            "t": t,
+            "pade_order": pade_order,
+            "markers": markers,
+        }
+
+    def _ensure_lti(self, obj):
+        if isinstance(obj, (int, float, complex, np.number)):
+            return ct.tf([obj], [1])
+
+        # python-control systems have ninputs/noutputs and are callable in the frequency domain.
+        if hasattr(obj, "ninputs") and hasattr(obj, "noutputs"):
+            if obj.ninputs != 1 or obj.noutputs != 1:
+                raise ValueError("Diese GUI unterstützt aktuell nur SISO-Systeme.")
+            return obj
+
+        raise TypeError(
+            "Die Systemeingabe muss ein python-control System oder ein Skalar sein. "
+            "Beispiel: K_R / (s**2 + 2*s + 1)"
+        )
+
+    def _parse_marker_frequencies(self, env):
+        text = self.marker_omega_var.get().strip()
+        if not text:
+            return []
+
+        markers = []
+        for part in text.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            val = float(eval(part, env, env))
+            if val >= 0:
+                markers.append(val)
+        return markers
+
+    def _parse_direction_arrow_settings(self, omega):
+        try:
+            count = int(float(self.direction_arrow_count_var.get().strip() or "0"))
+        except ValueError as exc:
+            raise ValueError("Die Anzahl der Richtungspfeile muss eine Zahl sein.") from exc
+
+        if count < 0:
+            raise ValueError("Die Anzahl der Richtungspfeile muss >= 0 sein.")
+        if count == 0:
+            return []
+
+        env = self._base_eval_environment()
+        positions = []
+        for part in self.direction_arrow_positions_var.get().split(","):
+            part = part.strip()
+            if not part:
+                continue
+            value = float(eval(part, env, env))
+            if value >= 0.0:
+                positions.append(value)
+
+        if not positions:
+            positive_omega = omega[omega > 0]
+            if positive_omega.size:
+                positions = np.linspace(float(positive_omega[0]), float(positive_omega[-1]), count + 2)[1:-1].tolist()
+            else:
+                return []
+
+        if len(positions) < count:
+            positive_omega = omega[omega > 0]
+            if not positive_omega.size:
+                return positions[:count]
+            extra = np.linspace(float(positive_omega[0]), float(positive_omega[-1]), count + 2)[1:-1].tolist()
+            positions.extend(pos for pos in extra if pos not in positions)
+
+        return positions[:count]
+
+    def _frequency_response_exact_delay(self, sys_rational, omega, delay):
+        mag, phase, omega_out = self._call_control("frequency_response", ct.frequency_response, sys_rational, omega)
+        response = np.squeeze(mag) * np.exp(1j * np.squeeze(phase))
+
+        if response.ndim != 1:
+            raise ValueError("Der Frequenzgang ist nicht eindimensional. Bitte ein SISO-System verwenden.")
+
+        delay_response = np.exp(-1j * omega_out * delay)
+        L = response * delay_response
+        return omega_out, L
+
+    def _selected_frequency_system(self, L):
+        selected = self.plot_system_var.get()
+        if selected == self.SYSTEM_OPEN:
+            return L
+        if selected == self.SYSTEM_CLOSED:
+            return L / (1.0 + L)
+        if selected == self.SYSTEM_SENS:
+            return 1.0 / (1.0 + L)
+        raise ValueError(f"Unbekannte Systemauswahl: {selected}")
+
+    def _time_domain_system_with_pade(self, sys_rational, delay, pade_order):
+        if delay > 0 and pade_order > 0:
+            num_delay, den_delay = self._call_control("pade", ct.pade, delay, pade_order)
+            delay_tf = self._call_control("tf fuer Pade-Totzeit", ct.tf, num_delay, den_delay)
+            L_time = sys_rational * delay_tf
+        else:
+            L_time = sys_rational
+
+        selected = self.plot_system_var.get()
+        if selected == self.SYSTEM_OPEN:
+            return L_time
+        if selected == self.SYSTEM_CLOSED:
+            return self._call_control("feedback fuer G(s)", ct.feedback, L_time, 1)
+        if selected == self.SYSTEM_SENS:
+            one = self._call_control("tf fuer Sensitivitaet", ct.tf, [1], [1])
+            return self._call_control("feedback fuer S(s)", ct.feedback, one, L_time)
+        raise ValueError(f"Unbekannte Systemauswahl: {selected}")
+
+    def open_sisotool(self):
+        if not hasattr(ct, "sisotool"):
+            messagebox.showinfo("SISO Tool", "Diese python-control-Version stellt ct.sisotool nicht bereit.")
+            return
+
+        self._control_warnings = []
+        try:
+            data = self._parse_user_input()
+            sys_for_tool = data["sys_rational"]
+
+            if data["delay"] > 0:
+                if data["pade_order"] <= 0:
+                    self._control_warnings.append(
+                        "sisotool: Totzeit wurde nicht beruecksichtigt, weil die Pade-Ordnung 0 ist."
+                    )
+                else:
+                    num_delay, den_delay = self._call_control("pade fuer sisotool", ct.pade, data["delay"], data["pade_order"])
+                    delay_tf = self._call_control("tf fuer sisotool-Totzeit", ct.tf, num_delay, den_delay)
+                    sys_for_tool = sys_for_tool * delay_tf
+
+            sisotool_omega = data["omega"][data["omega"] > 0]
+            if not sisotool_omega.size:
+                raise ValueError("Fuer ct.sisotool muss mindestens ein omega > 0 im Frequenzbereich liegen.")
+            self._call_control("sisotool", ct.sisotool, sys_for_tool, omega=sisotool_omega, tvect=data["t"])
+            self._show_control_warnings_if_needed()
+        except Exception as exc:
+            messagebox.showerror("SISO Tool", f"ct.sisotool konnte nicht gestartet werden:\n\n{exc}")
+
+    # ------------------------------------------------------------------
+    # Plotting
+    # ------------------------------------------------------------------
+    def schedule_update(self):
+        if self._is_updating:
+            return
+        if not self.auto_update_var.get():
+            return
+
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
+
+        self._after_id = self.after(350, self.update_plots)
+
+    def _call_control(self, label, func, *args, **kwargs):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = func(*args, **kwargs)
+
+        for warning in caught:
+            self._control_warnings.append(f"{label}: {warning.message}")
+
+        return result
+
+    def _show_control_warnings_if_needed(self):
+        if not self._control_warnings:
+            self._last_warning_text = ""
+            return
+
+        warning_text = "\n".join(dict.fromkeys(self._control_warnings))
+        if warning_text == self._last_warning_text:
+            return
+
+        self._last_warning_text = warning_text
+        messagebox.showwarning(
+            "Warnung von python-control",
+            "python-control hat Warnungen ausgegeben. Die Ergebnisse koennen dadurch ungenau oder irrefuehrend sein:\n\n"
+            f"{warning_text}",
+        )
+
+    def update_plots(self):
+        self._after_id = None
+        self._is_updating = True
+        self._control_warnings = []
+
+        try:
+            data = self._parse_user_input()
+            self._update_latex_preview(data)
+            active_tab = self.notebook.index(self.notebook.select())
+
+            if active_tab in (0, 1, 3):
+                omega_out, L = self._frequency_response_exact_delay(data["sys_rational"], data["omega"], data["delay"])
+                H_freq = self._selected_frequency_system(L)
+            else:
+                omega_out = L = H_freq = None
+
+            if active_tab in (2, 3):
+                sys_time = self._time_domain_system_with_pade(data["sys_rational"], data["delay"], data["pade_order"])
+            else:
+                sys_time = None
+
+            if active_tab == 0:
+                self._plot_nyquist(omega_out, H_freq, data["markers"])
+            elif active_tab == 1:
+                self._plot_bode(omega_out, H_freq)
+            elif active_tab == 2:
+                self._plot_step(sys_time, data["t"])
+            else:
+                self._update_info(data, omega_out, L, H_freq, sys_time)
+
+            if self._control_warnings:
+                self.status_var.set("Aktualisiert mit Warnung.")
+            else:
+                self.status_var.set("Aktualisiert.")
+            self._show_control_warnings_if_needed()
+
+        except Exception as exc:
+            self.status_var.set(f"Fehler: {exc}")
+            self._show_error_in_info(exc)
+
+        finally:
+            self._is_updating = False
+
+    def _plot_nyquist(self, omega, H, markers):
+        ax = self.ax_nyquist
+        ax.clear()
+
+        plot_H = H
+        normalized = self.normalized_nyquist_var.get()
+        if normalized:
+            scale = np.max(np.abs(H))
+            if scale > np.finfo(float).tiny:
+                plot_H = H / scale
+
+        label = self.plot_system_var.get()
+        ax.plot(plot_H.real, plot_H.imag, linewidth=2, label=label)
+
+        if self.show_negative_freq_var.get():
+            # For real-rational systems with pure delay, H(-jω) is the complex conjugate of H(jω).
+            ax.plot(plot_H.real, -plot_H.imag, linestyle="--", linewidth=1, label="gespiegelte neg. Frequenzen")
+
+        if self.show_critical_point_var.get() and not normalized:
+            ax.plot(-1, 0, "rx", markersize=10, label=r"kritischer Punkt $-1$")
+
+        # Start/end markers
+        ax.plot(plot_H.real[0], plot_H.imag[0], "o", markersize=7, label="_nolegend_")
+        ax.plot(plot_H.real[-1], plot_H.imag[-1], "d", markersize=6, label="_nolegend_")
+
+        # User-selected omega markers
+        used_marker_indices = set()
+        for w_mark in markers:
+            idx = int(np.argmin(np.abs(omega - w_mark)))
+            if idx in used_marker_indices:
+                continue
+            used_marker_indices.add(idx)
+            marker_label = "_nolegend_" if normalized else rf"$\omega={omega[idx]:.3g}$"
+            ax.plot(plot_H.real[idx], plot_H.imag[idx], "s", markersize=7, label=marker_label)
+            if not normalized:
+                ax.annotate(
+                    rf"$\omega={omega[idx]:.3g}$",
+                    (plot_H.real[idx], plot_H.imag[idx]),
+                    textcoords="offset points",
+                    xytext=(7, 7),
+                    fontsize=9,
+                )
+
+        self._draw_direction_markers(ax, plot_H, omega)
+
+        ax.axhline(0, color="black", linewidth=0.8)
+        ax.axvline(0, color="black", linewidth=0.8)
+        if normalized:
+            ax.grid(False)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+        else:
+            ax.grid(self.grid_var.get())
+            ax.set_xlabel(r"$\Re\{H(j\omega)\}$")
+            ax.set_ylabel(r"$\Im\{H(j\omega)\}$")
+
+        if self.equal_axis_var.get():
+            ax.axis("equal")
+
+        ax.set_title("Normierte Nyquist-Ortskurve" if normalized else "Nyquist-Ortskurve")
+        if not normalized:
+            ax.legend(loc="best", fontsize=8)
+        self.fig_nyquist.tight_layout()
+        self.canvas_nyquist.draw_idle()
+
+    def _draw_direction_markers(self, ax, H, omega):
+        n = len(H)
+        if n < 30:
+            return
+
+        indices = [int(np.argmin(np.abs(omega - w_arrow))) for w_arrow in self._parse_direction_arrow_settings(omega)]
+        used = set()
+
+        for i in indices:
+            i = max(0, min(n - 2, i))
+            if i in used:
+                continue
+            used.add(i)
+
+            dx = H.real[i + 1] - H.real[i]
+            dy = H.imag[i + 1] - H.imag[i]
+            if abs(dx) + abs(dy) < 1e-14:
+                continue
+
+            angle = np.degrees(np.arctan2(dy, dx))
+            ax.plot(
+                H.real[i],
+                H.imag[i],
+                marker=(3, 0, angle - 90),
+                markersize=10,
+                linestyle="None",
+                color="black",
+            )
+
+    def _plot_bode(self, omega, H):
+        ax_mag = self.ax_mag
+        ax_phase = self.ax_phase
+
+        ax_mag.clear()
+        ax_phase.clear()
+
+        mask = omega > 0
+        if not np.any(mask):
+            raise ValueError("Für den Bode-Plot muss mindestens ein ω > 0 vorhanden sein.")
+
+        w = omega[mask]
+        H_w = H[mask]
+
+        mag_db = 20.0 * np.log10(np.maximum(np.abs(H_w), np.finfo(float).tiny))
+        phase_deg = np.unwrap(np.angle(H_w)) * 180.0 / np.pi
+
+        ax_mag.semilogx(w, mag_db, linewidth=2)
+        ax_mag.set_ylabel(r"$|H(j\omega)|$ [dB]")
+        ax_mag.set_title("Frequenzgang / Bode")
+        ax_mag.grid(self.grid_var.get(), which="both")
+
+        ax_phase.semilogx(w, phase_deg, linewidth=2)
+        ax_phase.set_xlabel(r"$\omega$ [rad/s]")
+        ax_phase.set_ylabel(r"$\arg H(j\omega)$ [deg]")
+        ax_phase.grid(self.grid_var.get(), which="both")
+
+        right_limit = max(float(np.max(w)), 1.0)
+        ax_mag.set_xlim(left=1e-1, right=right_limit)
+        ax_phase.set_xlim(left=1e-1, right=right_limit)
+
+        self.fig_bode.tight_layout()
+        self.canvas_bode.draw_idle()
+
+    def _update_latex_preview(self, data):
+        ax = self.ax_latex
+        ax.clear()
+        ax.axis("off")
+
+        formula = self._transfer_function_to_latex(data["sys_rational"])
+        if data["delay"] > 0:
+            formula = formula + rf"\,e^{{-{data['delay']:.4g}s}}"
+
+        ax.text(0.5, 0.5, rf"$G_0(s) = {formula}$", ha="center", va="center", fontsize=12)
+        self.fig_latex.tight_layout(pad=0.1)
+        self.canvas_latex.draw_idle()
+
+    def _transfer_function_to_latex(self, sys_rational):
+        try:
+            num = np.asarray(sys_rational.num[0][0], dtype=float)
+            den = np.asarray(sys_rational.den[0][0], dtype=float)
+        except Exception:
+            escaped = str(sys_rational).replace("\\", r"\\").replace("_", r"\_")
+            return r"\mathrm{" + escaped + "}"
+
+        num_latex = self._poly_to_latex(num)
+        den_latex = self._poly_to_latex(den)
+        if den_latex == "1":
+            return num_latex
+        return rf"\frac{{{num_latex}}}{{{den_latex}}}"
+
+    def _poly_to_latex(self, coeffs):
+        coeffs = np.trim_zeros(np.asarray(coeffs, dtype=float), trim="f")
+        if coeffs.size == 0:
+            return "0"
+
+        degree = coeffs.size - 1
+        terms = []
+        for i, coeff in enumerate(coeffs):
+            if abs(coeff) < 1e-12:
+                continue
+
+            power = degree - i
+            sign = "-" if coeff < 0 else "+"
+            mag = abs(coeff)
+
+            if power == 0:
+                body = f"{mag:.6g}"
+            elif power == 1:
+                body = "s" if abs(mag - 1.0) < 1e-12 else rf"{mag:.6g}s"
+            else:
+                body = rf"s^{power}" if abs(mag - 1.0) < 1e-12 else rf"{mag:.6g}s^{power}"
+
+            if not terms:
+                terms.append(body if sign == "+" else "-" + body)
+            else:
+                terms.append(f" {sign} {body}")
+
+        return "".join(terms) if terms else "0"
+
+    def _plot_step(self, sys_time, t):
+        ax = self.ax_step
+        ax.clear()
+
+        try:
+            tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
+            y = np.squeeze(yout)
+            ax.plot(tout, y, linewidth=2)
+        except Exception as exc:
+            self._control_warnings.append(f"step_response: {exc}")
+            ax.text(
+                0.05,
+                0.95,
+                "Sprungantwort konnte nicht berechnet werden.\n"
+                "Mögliche Ursachen: uneigentliche Übertragungsfunktion,\n"
+                "numerisch problematische Padé-Ordnung oder instabiles System.\n\n"
+                f"{exc}",
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+            )
+
+        ax.set_xlabel(r"$t$ [s]")
+        ax.set_ylabel(r"$y(t)$")
+        ax.set_title("Sprungantwort")
+        ax.grid(self.grid_var.get())
+
+        self.fig_step.tight_layout()
+        self.canvas_step.draw_idle()
+
+    def _update_info(self, data, omega, L, H_freq, sys_time):
+        text_lines = []
+
+        text_lines.append("Aktuelle Auswertung")
+        text_lines.append("=" * 72)
+        text_lines.append("")
+        text_lines.append(f"Plot-System: {self.plot_system_var.get()}")
+        text_lines.append(f"Totzeit: {data['delay']:.8g} s")
+        text_lines.append(f"Padé-Ordnung für Zeitbereich: {data['pade_order']}")
+        text_lines.append("")
+        text_lines.append("Rationaler Anteil:")
+        text_lines.append(str(data["sys_rational"]))
+        text_lines.append("")
+
+        # A few characteristic values for the open loop G_0(j omega)
+        text_lines.append("Ausgewaehlte Werte des offenen Kreises G_0(j omega) mit exakter Totzeit:")
+        for w_mark in data["markers"]:
+            idx = int(np.argmin(np.abs(omega - w_mark)))
+            val = L[idx]
+            text_lines.append(
+                f"  ω = {omega[idx]:.6g}: "
+                f"G_0 = {val.real:.6g} {val.imag:+.6g}j, "
+                f"|L| = {abs(val):.6g}, "
+                f"phase = {np.angle(val):.6g} rad"
+            )
+
+        text_lines.append("")
+        text_lines.append("Für den Zeitbereich verwendetes rationales System:")
+        text_lines.append(str(sys_time))
+        text_lines.append("")
+
+        # Step response information
+        try:
+            info = self._call_control("step_info", ct.step_info, sys_time, T=data["t"])
+            text_lines.append("Step-Info:")
+            for key, value in info.items():
+                text_lines.append(f"  {key}: {value}")
+        except Exception as exc:
+            text_lines.append(f"Step-Info nicht verfügbar: {exc}")
+
+        text_lines.append("")
+        text_lines.append("Hinweis:")
+        text_lines.append(
+            "Nyquist und Bode verwenden die Totzeit exakt im Frequenzbereich. "
+            "Die Sprungantwort verwendet stattdessen die eingestellte Padé-Approximation."
+        )
+
+        self.info_text.configure(state=tk.NORMAL)
+        self.info_text.delete("1.0", tk.END)
+        self.info_text.insert("1.0", "\n".join(text_lines))
+        self.info_text.configure(state=tk.DISABLED)
+
+    def _show_error_in_info(self, exc):
+        self.info_text.configure(state=tk.NORMAL)
+        self.info_text.delete("1.0", tk.END)
+        self.info_text.insert(
+            "1.0",
+            "Fehler bei der Auswertung:\n\n"
+            f"{exc}\n\n"
+            "Traceback:\n"
+            f"{traceback.format_exc()}",
+        )
+        self.info_text.configure(state=tk.DISABLED)
+
+    def load_default_example(self):
+        self.params_text.delete("1.0", tk.END)
+        self.params_text.insert(
+            "1.0",
+            "K_R = 2.0\n"
+            "T_t = np.pi / 4\n"
+        )
+
+        self.system_text.delete("1.0", tk.END)
+        self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
+
+        self.delay_var.set("T_t")
+        self.omega_min_var.set("0")
+        self.omega_max_var.set("30")
+        self.n_points_var.set("6000")
+        self.t_max_var.set("20")
+        self.t_points_var.set("2000")
+        self.pade_order_var.set("6")
+        self.marker_omega_var.set("0, 1")
+        self.plot_system_var.set(self.SYSTEM_OPEN)
+        self.normalized_nyquist_var.set(False)
+        self.direction_arrow_count_var.set("4")
+        self.direction_arrow_positions_var.set("1, 5, 10, 20")
+        self.schedule_update()
+
+
+if __name__ == "__main__":
+    app = ControlExplorerApp()
+    app.mainloop()
