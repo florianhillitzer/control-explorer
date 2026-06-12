@@ -490,7 +490,7 @@ class ControlExplorerApp(tk.Tk):
         self.system_text.grid(row=4, column=0, sticky="nsew", pady=(2, 8))
         self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
 
-        self.fig_latex = Figure(figsize=(4.6, 0.75), dpi=100)
+        self.fig_latex = Figure(figsize=(4.6, 1.35), dpi=100)
         self.ax_latex = self.fig_latex.add_subplot(111)
         self.ax_latex.axis("off")
         self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
@@ -1127,6 +1127,105 @@ class ControlExplorerApp(tk.Tk):
             return 1.0 / (1.0 + L)
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
+    def _is_open_loop_selection(self, selected):
+        return selected == self.SYSTEM_OPEN
+
+    def _rational_high_frequency_limit(self, sys_rational):
+        """
+        Grenzwert des rationalen Anteils fuer s -> infinity.
+
+        Rueckgabe:
+        - complex value: endlicher Grenzwert
+        - np.inf: Betrag divergiert
+        """
+        try:
+            sys_tf = ct.tf(sys_rational)
+            num = np.trim_zeros(np.asarray(sys_tf.num[0][0], dtype=float), trim="f")
+            den = np.trim_zeros(np.asarray(sys_tf.den[0][0], dtype=float), trim="f")
+        except Exception:
+            return None
+
+        if num.size == 0:
+            return 0.0 + 0.0j
+        if den.size == 0:
+            return np.inf
+
+        degree_num = num.size - 1
+        degree_den = den.size - 1
+
+        if degree_num < degree_den:
+            return 0.0 + 0.0j
+        if degree_num == degree_den:
+            return complex(num[0] / den[0])
+
+        return np.inf
+
+    def _frequency_limit_summary(self, sys_rational, delay):
+        """
+        Bestimmt die Grenzwerte fuer omega -> infinity soweit eindeutig.
+
+        Bei nichtverschwindendem rationalem Grenzwert und positiver Totzeit
+        existiert wegen exp(-j omega T) kein komplexer Grenzwert.
+        """
+        rational_limit = self._rational_high_frequency_limit(sys_rational)
+
+        if rational_limit is None:
+            return {
+                "open": "nicht bestimmbar",
+                "closed": "nicht bestimmbar",
+                "sensitivity": "nicht bestimmbar",
+            }
+
+        if rational_limit is np.inf or rational_limit == np.inf:
+            return {
+                "open": "|G_0(jω)| → ∞",
+                "closed": "G(jω) → 1",
+                "sensitivity": "S(jω) → 0",
+            }
+
+        rational_limit = complex(rational_limit)
+
+        if delay > 0 and abs(rational_limit) > 1e-14:
+            return {
+                "open": (
+                    "kein komplexer Grenzwert; "
+                    f"|G_0(jω)| → {abs(rational_limit):.6g} "
+                    "wegen oszillierender Totzeitphase"
+                ),
+                "closed": "kein eindeutiger komplexer Grenzwert wegen Totzeitphase",
+                "sensitivity": "kein eindeutiger komplexer Grenzwert wegen Totzeitphase",
+            }
+
+        L_inf = rational_limit
+        closed_inf = self._safe_closed_loop_value(L_inf)
+        sensitivity_inf = self._safe_sensitivity_value(L_inf)
+
+        return {
+            "open": self._format_complex_limit(L_inf),
+            "closed": self._format_complex_limit(closed_inf),
+            "sensitivity": self._format_complex_limit(sensitivity_inf),
+        }
+
+    def _safe_closed_loop_value(self, L):
+        denominator = 1.0 + L
+        if abs(denominator) < 1e-14:
+            return np.inf
+        return L / denominator
+
+    def _safe_sensitivity_value(self, L):
+        denominator = 1.0 + L
+        if abs(denominator) < 1e-14:
+            return np.inf
+        return 1.0 / denominator
+
+    def _format_complex_limit(self, value):
+        if value is np.inf or value == np.inf:
+            return "∞"
+        value = complex(value)
+        if abs(value.imag) < 1e-13:
+            return f"{value.real:.6g}"
+        return f"{value.real:.6g} {value.imag:+.6g}j"
+
     def _time_domain_system_with_pade(self, sys_rational, delay, pade_order, selected):
         if delay > 0 and pade_order > 0:
             num_delay, den_delay = self._call_control("pade", ct.pade, delay, pade_order)
@@ -1282,35 +1381,54 @@ class ControlExplorerApp(tk.Tk):
         ax = self.ax_nyquist
         ax.clear()
 
-        plot_H = H
+        selected = self.nyquist_plot_system_var.get()
         normalized = self.normalized_nyquist_var.get()
+
+        plot_H = H
+        scale = 1.0
         if normalized:
             scale = np.max(np.abs(H))
             if scale > np.finfo(float).tiny:
                 plot_H = H / scale
+            else:
+                scale = 1.0
 
-        label = self.nyquist_plot_system_var.get()
+        label = selected
         ax.plot(plot_H.real, plot_H.imag, linewidth=2, label=label)
 
         if self.show_negative_freq_var.get():
             # For real-rational systems with pure delay, H(-jω) is the complex conjugate of H(jω).
-            ax.plot(plot_H.real, -plot_H.imag, linestyle="--", linewidth=1, label="gespiegelte neg. Frequenzen")
+            ax.plot(
+                plot_H.real,
+                -plot_H.imag,
+                linestyle="--",
+                linewidth=1,
+                label="gespiegelte neg. Frequenzen",
+            )
 
-        if self.show_critical_point_var.get() and not normalized:
-            ax.plot(-1, 0, "rx", markersize=10, label=r"kritischer Punkt $-1$")
+        if self.show_critical_point_var.get() and self._is_open_loop_selection(selected):
+            # Der kritische Punkt -1 gehoert zur Nyquist-Ortskurve des offenen Kreises.
+            # Wird die Kurve normiert, muss auch der Punkt entsprechend mitskaliert werden.
+            critical_point = -1.0 / scale if normalized else -1.0
+            critical_label = r"kritischer Punkt $-1$"
+            if normalized:
+                critical_label = r"kritischer Punkt $-1$ (mitnormiert)"
+            ax.plot(critical_point, 0, "rx", markersize=10, label=critical_label)
 
         # Start/end markers
-        ax.plot(plot_H.real[0], plot_H.imag[0], "o", markersize=7, label="_nolegend_")
-        ax.plot(plot_H.real[-1], plot_H.imag[-1], "d", markersize=6, label="_nolegend_")
+        start_label = r"$\omega=0$" if normalized else "_nolegend_"
+        end_label = r"$\omega\to\infty$" if normalized else "_nolegend_"
+        ax.plot(plot_H.real[0], plot_H.imag[0], "o", markersize=7, label=start_label)
+        ax.plot(plot_H.real[-1], plot_H.imag[-1], "d", markersize=6, label=end_label)
 
         # User-selected omega markers
-        used_marker_indices = set()
+        used_marker_indices = {0, len(plot_H) - 1} if normalized else set()
         for w_mark in markers:
             idx = int(np.argmin(np.abs(omega - w_mark)))
             if idx in used_marker_indices:
                 continue
             used_marker_indices.add(idx)
-            marker_label = "_nolegend_" if normalized else rf"$\omega={omega[idx]:.3g}$"
+            marker_label = rf"$\omega={omega[idx]:.3g}$"
             ax.plot(plot_H.real[idx], plot_H.imag[idx], "s", markersize=7, label=marker_label)
             if not normalized:
                 ax.annotate(
@@ -1339,10 +1457,24 @@ class ControlExplorerApp(tk.Tk):
         if self.equal_axis_var.get():
             ax.axis("equal")
 
-        ax.set_title("Normierte Nyquist-Ortskurve" if normalized else "Nyquist-Ortskurve")
-        if not normalized:
-            ax.legend(loc="best", fontsize=8)
-        self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(omega))
+        title = "Normierte Nyquist-Ortskurve" if normalized else "Nyquist-Ortskurve"
+        if not self._is_open_loop_selection(selected) and self.show_critical_point_var.get():
+            title += " (kein endlicher kritischer Punkt)"
+        ax.set_title(title)
+
+        ax.legend(loc="best", fontsize=8)
+
+        if normalized:
+            # Im Logo-/Normierungsmodus bewusst keinen Hover verwenden:
+            # keine Zahlen/Raster und keine dynamischen Messwertboxen.
+            self._hover_data.pop(ax, None)
+            annotation = self._hover_annotations.pop(ax, None)
+            if annotation is not None:
+                annotation.set_visible(False)
+            self._hover_backgrounds.pop(ax, None)
+        else:
+            self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(omega))
+
         self.fig_nyquist.tight_layout()
         self.canvas_nyquist.draw_idle()
 
@@ -1416,11 +1548,40 @@ class ControlExplorerApp(tk.Tk):
         ax.clear()
         ax.axis("off")
 
-        formula = self._transfer_function_to_latex(data["sys_rational"])
+        open_formula = self._transfer_function_to_latex(data["sys_rational"])
         if data["delay"] > 0:
-            formula = formula + rf"\,e^{{-{data['delay']:.4g}s}}"
+            open_formula = open_formula + rf"\,e^{{-{data['delay']:.4g}s}}"
 
-        ax.text(0.5, 0.5, rf"$G_0(s) = {formula}$", ha="center", va="center", fontsize=12)
+        if data["delay"] > 0:
+            closed_formula = rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
+        else:
+            try:
+                closed_tf = self._call_control(
+                    "feedback fuer Latex-Vorschau",
+                    ct.feedback,
+                    data["sys_rational"],
+                    1,
+                )
+                closed_formula = self._transfer_function_to_latex(closed_tf)
+            except Exception:
+                closed_formula = rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
+
+        ax.text(
+            0.5,
+            0.70,
+            rf"$G_0(s) = {open_formula}$",
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
+        ax.text(
+            0.5,
+            0.28,
+            rf"$G(s) = {closed_formula}$",
+            ha="center",
+            va="center",
+            fontsize=11,
+        )
         self.fig_latex.tight_layout(pad=0.1)
         self.canvas_latex.draw_idle()
 
@@ -1538,6 +1699,17 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(str(data["sys_rational"]))
         text_lines.append("")
 
+        text_lines.append("Kritischer Punkt:")
+        if self._is_open_loop_selection(self.nyquist_plot_system_var.get()):
+            text_lines.append("  Für die Nyquist-Ortskurve des offenen Kreises ist der kritische Punkt -1 + 0j.")
+        else:
+            text_lines.append(
+                "  Der Punkt -1 gehört zur Nyquist-Ortskurve des offenen Kreises L(jω). "
+                "Bei der Darstellung des geschlossenen Kreises G=L/(1+L) oder der Sensitivität S=1/(1+L) "
+                "gibt es keinen entsprechenden endlichen kritischen Punkt; L=-1 bildet sich auf eine Polstelle/Unendlichkeit ab."
+            )
+        text_lines.append("")
+
         # A few characteristic values for the open loop G_0(j omega)
         text_lines.append("Ausgewaehlte Werte des offenen Kreises G_0(j omega) mit exakter Totzeit:")
         for w_mark in data["markers"]:
@@ -1548,6 +1720,24 @@ class ControlExplorerApp(tk.Tk):
                 f"G_0 = {val.real:.6g} {val.imag:+.6g}j, "
                 f"|L| = {abs(val):.6g}, "
                 f"phase = {np.angle(val):.6g} rad"
+            )
+
+        text_lines.append("")
+        text_lines.append("Grenzwerte für ω -> ∞:")
+        limits = self._frequency_limit_summary(data["sys_rational"], data["delay"])
+        text_lines.append(f"  Offener Kreis G_0(jω): {limits['open']}")
+        text_lines.append(f"  Geschlossener Kreis G(jω)=G_0/(1+G_0): {limits['closed']}")
+        text_lines.append(f"  Sensitivität S(jω)=1/(1+G_0): {limits['sensitivity']}")
+
+        if omega is not None and L is not None and len(omega) > 0:
+            last = L[-1]
+            text_lines.append("")
+            text_lines.append("Letzter berechneter Frequenzpunkt als numerische Kontrolle:")
+            text_lines.append(
+                f"  ω_max = {omega[-1]:.6g}: "
+                f"G_0 = {last.real:.6g} {last.imag:+.6g}j, "
+                f"|L| = {abs(last):.6g}, "
+                f"phase = {np.angle(last):.6g} rad"
             )
 
         text_lines.append("")
