@@ -18,6 +18,13 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 import control as ct
 
+from PIL import Image, ImageDraw
+
+try:
+    from matplotlib.backends._backend_tk import add_tooltip
+except Exception:
+    add_tooltip = None
+
 
 class ControlExplorerApp(tk.Tk):
     """
@@ -549,11 +556,198 @@ class ControlExplorerApp(tk.Tk):
 
     def _embed_figure(self, parent, fig):
         canvas = FigureCanvasTkAgg(fig, master=parent)
+
         toolbar = NavigationToolbar2Tk(canvas, parent, pack_toolbar=False)
         toolbar.update()
+
+        self._add_custom_toolbar_buttons(toolbar, fig)
+
         toolbar.pack(side=tk.TOP, fill=tk.X)
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
         return canvas
+    
+    def _add_custom_toolbar_buttons(self, toolbar, fig):
+        """
+        Ergänzt die Matplotlib-Toolbar um eigene Zoom-In/Zoom-Out-Buttons
+        im gleichen Icon-Stil wie die Standard-Buttons.
+        """
+        zoom_in_icon, zoom_out_icon = self._ensure_toolbar_zoom_icons()
+
+        # Gleicher Separator-Stil wie Matplotlib intern
+        toolbar._Spacer()
+
+        btn_zoom_in = toolbar._Button(
+            "Zoom in",
+            str(zoom_in_icon),
+            False,
+            lambda: self._zoom_figure(fig, factor=0.8, toolbar=toolbar),
+        )
+
+        btn_zoom_out = toolbar._Button(
+            "Zoom out",
+            str(zoom_out_icon),
+            False,
+            lambda: self._zoom_figure(fig, factor=1.25, toolbar=toolbar),
+        )
+
+        if add_tooltip is not None:
+            add_tooltip(btn_zoom_in, "Zoom in")
+            add_tooltip(btn_zoom_out, "Zoom out")
+
+
+    def _ensure_toolbar_zoom_icons(self):
+        """
+        Erstellt transparente PNG-Icons für Zoom-In und Zoom-Out.
+
+        Wichtig:
+        - schwarzes Symbol auf transparentem Hintergrund
+        - Matplotlib recoloriert schwarze Pixel automatisch passend zum Theme
+        - zusätzlich werden *_large.png Varianten erzeugt
+        """
+        icon_dir = Path(__file__).resolve().parent / "toolbar_icons"
+        icon_dir.mkdir(parents=True, exist_ok=True)
+
+        zoom_in = icon_dir / "zoom_in_custom.png"
+        zoom_out = icon_dir / "zoom_out_custom.png"
+
+        specs = [
+            (zoom_in, "+"),
+            (zoom_out, "-"),
+            (icon_dir / "zoom_in_custom_large.png", "+"),
+            (icon_dir / "zoom_out_custom_large.png", "-"),
+        ]
+
+        for path, sign in specs:
+            size = 48 if path.stem.endswith("_large") else 24
+            if not path.exists():
+                self._draw_zoom_toolbar_icon(path, sign=sign, size=size)
+
+        return zoom_in, zoom_out
+
+
+    def _draw_zoom_toolbar_icon(self, path, sign, size=24):
+        """
+        Zeichnet ein Lupen-Icon mit + oder - als transparente PNG-Datei.
+        Der Stil orientiert sich an den Matplotlib-Toolbar-Icons.
+        """
+        scale = 4
+        w = h = size * scale
+
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        black = (0, 0, 0, 255)
+
+        lw = max(2 * scale, int(0.10 * w))
+        symbol_lw = max(2 * scale, int(0.085 * w))
+
+        # Lupenkreis
+        x0 = int(0.14 * w)
+        y0 = int(0.12 * h)
+        x1 = int(0.64 * w)
+        y1 = int(0.62 * h)
+
+        draw.ellipse((x0, y0, x1, y1), outline=black, width=lw)
+
+        # Griff
+        draw.line(
+            (int(0.58 * w), int(0.58 * h), int(0.84 * w), int(0.84 * h)),
+            fill=black,
+            width=lw,
+        )
+
+        # Plus/Minus im Lupenkreis
+        cx = int(0.39 * w)
+        cy = int(0.37 * h)
+        r = int(0.13 * w)
+
+        draw.line((cx - r, cy, cx + r, cy), fill=black, width=symbol_lw)
+
+        if sign == "+":
+            draw.line((cx, cy - r, cx, cy + r), fill=black, width=symbol_lw)
+
+        resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        img = img.resize((size, size), resample)
+
+        img.save(path)
+
+
+    def _zoom_figure(self, fig, factor, toolbar=None):
+        """
+        Zoomt alle sichtbaren Achsen einer Figure.
+
+        factor < 1  -> Zoom in
+        factor > 1  -> Zoom out
+
+        Funktioniert auch für logarithmische x-Achsen, z. B. beim Bode-Plot.
+        """
+        if toolbar is not None:
+            try:
+                toolbar.push_current()
+            except Exception:
+                pass
+
+        for ax in fig.axes:
+            if not ax.get_visible():
+                continue
+
+            self._zoom_axis_limits(ax, axis="x", factor=factor)
+            self._zoom_axis_limits(ax, axis="y", factor=factor)
+
+        if toolbar is not None:
+            try:
+                toolbar.push_current()
+                toolbar.set_history_buttons()
+            except Exception:
+                pass
+
+        fig.canvas.draw_idle()
+
+
+    def _zoom_axis_limits(self, ax, axis, factor):
+        """
+        Zoomt x- oder y-Grenzen einer Achse um deren Mittelpunkt.
+        Berücksichtigt lineare und logarithmische Achsenskalierung.
+        """
+        if axis == "x":
+            lower, upper = ax.get_xlim()
+            scale = ax.get_xscale()
+            setter = ax.set_xlim
+        else:
+            lower, upper = ax.get_ylim()
+            scale = ax.get_yscale()
+            setter = ax.set_ylim
+
+        if not np.isfinite(lower) or not np.isfinite(upper):
+            return
+
+        if lower == upper:
+            return
+
+        # Logarithmische Achse, z. B. Bode-Frequenzachse
+        if scale == "log":
+            if lower <= 0 or upper <= 0:
+                return
+
+            log_lower = np.log10(lower)
+            log_upper = np.log10(upper)
+
+            center = 0.5 * (log_lower + log_upper)
+            half_width = 0.5 * (log_upper - log_lower) * factor
+
+            new_lower = 10 ** (center - half_width)
+            new_upper = 10 ** (center + half_width)
+
+        # Lineare Achse
+        else:
+            center = 0.5 * (lower + upper)
+            half_width = 0.5 * (upper - lower) * factor
+
+            new_lower = center - half_width
+            new_upper = center + half_width
+
+        setter(new_lower, new_upper)
 
     def _register_hover(self, ax, kind, x, y, **extra):
         annotation = ax.annotate(
