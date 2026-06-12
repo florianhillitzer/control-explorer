@@ -7,6 +7,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import sys
 import traceback
 import warnings
 
@@ -75,11 +76,18 @@ class ControlExplorerApp(tk.Tk):
         self._control_warnings = []
         self._hover_data = {}
         self._hover_annotations = {}
+        self._hover_backgrounds = {}
+        self._hover_after_id = None
+        self._pending_hover = None
+        self._last_hover_target = (None, None)
         self._sisotool_result = None
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
-        self.examples_dir = Path(__file__).resolve().parent / "examples"
+        if getattr(sys, "frozen", False):
+            self.examples_dir = Path.home() / "Documents" / "Control Explorer Examples"
+        else:
+            self.examples_dir = Path(__file__).resolve().parent / "examples"
 
         self._create_variables()
         self._load_settings()
@@ -268,6 +276,8 @@ class ControlExplorerApp(tk.Tk):
     def _on_close(self):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
+        if self._hover_after_id is not None:
+            self.after_cancel(self._hover_after_id)
         self._save_settings()
         native_icon_handles = list(self._native_icon_handles)
         self.destroy()
@@ -531,6 +541,7 @@ class ControlExplorerApp(tk.Tk):
 
         for canvas in (self.canvas_nyquist, self.canvas_bode, self.canvas_step):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
+            canvas.mpl_connect("draw_event", self._cache_hover_backgrounds)
 
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
         self.info_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -556,6 +567,7 @@ class ControlExplorerApp(tk.Tk):
             zorder=20,
         )
         annotation.set_visible(False)
+        annotation.set_animated(True)
         self._hover_annotations[ax] = annotation
         self._hover_data[ax] = {
             "kind": kind,
@@ -564,16 +576,46 @@ class ControlExplorerApp(tk.Tk):
             **extra,
         }
 
+    def _cache_hover_backgrounds(self, event):
+        canvas = event.canvas
+        for ax in canvas.figure.axes:
+            if ax in self._hover_annotations:
+                self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
+
+    def _draw_hover_axes(self, axes):
+        for ax in set(axes):
+            canvas = ax.figure.canvas
+            background = self._hover_backgrounds.get(ax)
+            if background is None:
+                canvas.draw_idle()
+                continue
+            canvas.restore_region(background)
+            annotation = self._hover_annotations.get(ax)
+            if annotation is not None and annotation.get_visible():
+                ax.draw_artist(annotation)
+            canvas.blit(ax.bbox)
+
     def _on_plot_hover(self, event):
-        ax = event.inaxes
-        if ax not in self._hover_data or event.xdata is None or event.ydata is None:
-            changed_canvases = set()
+        self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
+        if self._hover_after_id is None:
+            self._hover_after_id = self.after(25, self._process_plot_hover)
+
+    def _process_plot_hover(self):
+        self._hover_after_id = None
+        if self._pending_hover is None:
+            return
+
+        ax, xdata, ydata, canvas = self._pending_hover
+        self._pending_hover = None
+
+        if ax not in self._hover_data or xdata is None or ydata is None:
+            changed_axes = []
             for annotation in self._hover_annotations.values():
                 if annotation.get_visible():
                     annotation.set_visible(False)
-                    changed_canvases.add(annotation.figure.canvas)
-            for canvas in changed_canvases:
-                canvas.draw_idle()
+                    changed_axes.append(annotation.axes)
+            self._last_hover_target = (None, None)
+            self._draw_hover_axes(changed_axes)
             return
 
         data = self._hover_data[ax]
@@ -582,14 +624,33 @@ class ControlExplorerApp(tk.Tk):
         if not x.size:
             return
 
-        if data["kind"].startswith("bode") and event.xdata > 0:
-            idx = int(np.argmin(np.abs(np.log10(x) - np.log10(event.xdata))))
+        kind = data["kind"]
+        if kind.startswith("bode") and xdata > 0:
+            idx = self._nearest_sorted_index(x, xdata)
+        elif kind == "step":
+            idx = self._nearest_sorted_index(x, xdata)
         else:
             x_span = max(abs(ax.get_xlim()[1] - ax.get_xlim()[0]), np.finfo(float).eps)
             y_span = max(abs(ax.get_ylim()[1] - ax.get_ylim()[0]), np.finfo(float).eps)
-            idx = int(np.argmin(((x - event.xdata) / x_span) ** 2 + ((y - event.ydata) / y_span) ** 2))
+            stride = max(1, int(np.ceil(x.size / 1200)))
+            coarse_indices = np.arange(0, x.size, stride)
+            coarse_distance = (
+                ((x[coarse_indices] - xdata) / x_span) ** 2
+                + ((y[coarse_indices] - ydata) / y_span) ** 2
+            )
+            coarse_idx = int(coarse_indices[int(np.argmin(coarse_distance))])
+            start = max(0, coarse_idx - stride)
+            stop = min(x.size, coarse_idx + stride + 1)
+            local_distance = (
+                ((x[start:stop] - xdata) / x_span) ** 2
+                + ((y[start:stop] - ydata) / y_span) ** 2
+            )
+            idx = start + int(np.argmin(local_distance))
 
-        kind = data["kind"]
+        if self._last_hover_target == (ax, idx) and self._hover_annotations[ax].get_visible():
+            return
+        self._last_hover_target = (ax, idx)
+
         if kind == "nyquist":
             omega = data["omega"][idx]
             text = (
@@ -617,18 +678,27 @@ class ControlExplorerApp(tk.Tk):
                 rf"$u(t) = {data['input_signal'][idx]:.5g}$"
             )
 
-        changed_canvases = {event.canvas}
+        changed_axes = [ax]
         for hover_ax, annotation in self._hover_annotations.items():
             should_be_visible = hover_ax is ax
             if annotation.get_visible() != should_be_visible:
                 annotation.set_visible(should_be_visible)
-                changed_canvases.add(annotation.figure.canvas)
+                changed_axes.append(hover_ax)
 
         annotation = self._hover_annotations[ax]
         annotation.xy = (x[idx], y[idx])
         annotation.set_text(text)
-        for canvas in changed_canvases:
-            canvas.draw_idle()
+        self._draw_hover_axes(changed_axes)
+
+    @staticmethod
+    def _nearest_sorted_index(values, target):
+        index = int(np.searchsorted(values, target))
+        if index <= 0:
+            return 0
+        if index >= len(values):
+            return len(values) - 1
+        before = index - 1
+        return before if abs(target - values[before]) <= abs(values[index] - target) else index
 
     def _add_entry(self, parent, label, variable, row, col):
         frame = ttk.Frame(parent)
