@@ -2,6 +2,8 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -41,6 +43,7 @@ class ControlExplorerApp(tk.Tk):
         "bode_x_max": "1e3",
         "t_max": "20",
         "t_points": "2000",
+        "step_amplitude": "1",
         "pade_order": "6",
         "marker_omega": "0, 1",
         "plot_system": SYSTEM_OPEN,
@@ -54,9 +57,12 @@ class ControlExplorerApp(tk.Tk):
     }
 
     def __init__(self):
+        self._set_windows_app_id()
         super().__init__()
+        self._native_icon_handles = []
 
         self.title("Control Explorer - Nyquist, Bode, Sprungantwort")
+        self._set_window_icon()
         self.geometry("1300x820")
         self.minsize(1050, 650)
 
@@ -84,6 +90,81 @@ class ControlExplorerApp(tk.Tk):
 
         self.schedule_update()
 
+    @staticmethod
+    def _set_windows_app_id():
+        if os.name != "nt":
+            return
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "ControlExplorer.GUI.1"
+            )
+        except (AttributeError, OSError):
+            pass
+
+    def _set_window_icon(self):
+        app_dir = Path(__file__).resolve().parent
+        png_path = app_dir / "control_explorer_icon.png"
+        ico_path = app_dir / "control_explorer.ico"
+
+        try:
+            if png_path.exists():
+                self._logo_image = tk.PhotoImage(file=str(png_path))
+                self.iconphoto(True, self._logo_image)
+            else:
+                self._logo_image = None
+
+            if os.name == "nt" and ico_path.exists():
+                self.iconbitmap(str(ico_path), default=str(ico_path))
+                self._set_windows_native_icons(ico_path)
+        except tk.TclError:
+            self._logo_image = None
+
+    def _set_windows_native_icons(self, ico_path):
+        try:
+            self.update_idletasks()
+            user32 = ctypes.windll.user32
+
+            user32.GetParent.argtypes = [wintypes.HWND]
+            user32.GetParent.restype = wintypes.HWND
+            user32.LoadImageW.argtypes = [
+                wintypes.HINSTANCE,
+                wintypes.LPCWSTR,
+                wintypes.UINT,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ]
+            user32.LoadImageW.restype = wintypes.HANDLE
+            user32.SendMessageW.argtypes = [
+                wintypes.HWND,
+                wintypes.UINT,
+                wintypes.WPARAM,
+                wintypes.LPARAM,
+            ]
+            user32.SendMessageW.restype = wintypes.LPARAM
+
+            hwnd = user32.GetParent(self.winfo_id()) or self.winfo_id()
+            big_size = user32.GetSystemMetrics(11)
+            small_size = user32.GetSystemMetrics(49)
+            load_from_file = 0x0010
+            image_icon = 1
+
+            big_icon = user32.LoadImageW(
+                None, str(ico_path), image_icon, big_size, big_size, load_from_file
+            )
+            small_icon = user32.LoadImageW(
+                None, str(ico_path), image_icon, small_size, small_size, load_from_file
+            )
+
+            if big_icon:
+                user32.SendMessageW(hwnd, 0x0080, 1, big_icon)
+                self._native_icon_handles.append(big_icon)
+            if small_icon:
+                user32.SendMessageW(hwnd, 0x0080, 0, small_icon)
+                self._native_icon_handles.append(small_icon)
+        except (AttributeError, OSError, tk.TclError):
+            pass
+
     # ------------------------------------------------------------------
     # GUI construction
     # ------------------------------------------------------------------
@@ -97,6 +178,7 @@ class ControlExplorerApp(tk.Tk):
 
         self.t_max_var = tk.StringVar(value=defaults["t_max"])
         self.t_points_var = tk.StringVar(value=defaults["t_points"])
+        self.step_amplitude_var = tk.StringVar(value=defaults["step_amplitude"])
 
         self.pade_order_var = tk.StringVar(value=defaults["pade_order"])
         self.marker_omega_var = tk.StringVar(value=defaults["marker_omega"])
@@ -119,6 +201,7 @@ class ControlExplorerApp(tk.Tk):
             "bode_x_max": self.bode_x_max_var,
             "t_max": self.t_max_var,
             "t_points": self.t_points_var,
+            "step_amplitude": self.step_amplitude_var,
             "pade_order": self.pade_order_var,
             "marker_omega": self.marker_omega_var,
             "plot_system": self.plot_system_var,
@@ -186,7 +269,11 @@ class ControlExplorerApp(tk.Tk):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
         self._save_settings()
+        native_icon_handles = list(self._native_icon_handles)
         self.destroy()
+        if os.name == "nt":
+            for icon_handle in native_icon_handles:
+                ctypes.windll.user32.DestroyIcon(icon_handle)
 
     def _create_menu(self):
         menu_bar = tk.Menu(self)
@@ -296,7 +383,8 @@ class ControlExplorerApp(tk.Tk):
     def _create_step_settings(self, parent):
         self._add_entry(parent, "t_max", self.t_max_var, 0, 0)
         self._add_entry(parent, "Punkte", self.t_points_var, 1, 0)
-        self._add_entry(parent, "Pade-Ordnung", self.pade_order_var, 2, 0)
+        self._add_entry(parent, "Sprungfaktor A", self.step_amplitude_var, 2, 0)
+        self._add_entry(parent, "Pade-Ordnung", self.pade_order_var, 3, 0)
         ttk.Label(
             parent,
             text=(
@@ -308,7 +396,7 @@ class ControlExplorerApp(tk.Tk):
             wraplength=460,
             justify="left",
             foreground="#555555",
-        ).grid(row=3, column=0, sticky="w", padx=6, pady=(10, 0))
+        ).grid(row=4, column=0, sticky="w", padx=6, pady=(10, 0))
 
     def _create_nyquist_settings(self, parent):
         ttk.Checkbutton(parent, text="axis equal", variable=self.equal_axis_var, command=self.schedule_update).grid(row=0, column=0, sticky="w", pady=3)
@@ -504,13 +592,30 @@ class ControlExplorerApp(tk.Tk):
         kind = data["kind"]
         if kind == "nyquist":
             omega = data["omega"][idx]
-            text = f"omega = {omega:.5g} rad/s\nRe = {x[idx]:.5g}\nIm = {y[idx]:.5g}\n|H| = {abs(complex(x[idx], y[idx])):.5g}"
+            text = (
+                rf"$\omega = {omega:.5g}\,\mathrm{{rad/s}}$" "\n"
+                rf"$\Re\{{H(j\omega)\}} = {x[idx]:.5g}$" "\n"
+                rf"$\Im\{{H(j\omega)\}} = {y[idx]:.5g}$" "\n"
+                rf"$\left|H(j\omega)\right| = {abs(complex(x[idx], y[idx])):.5g}$"
+            )
         elif kind == "bode_mag":
-            text = f"omega = {x[idx]:.5g} rad/s\nBetrag = {y[idx]:.5g} dB\nPhase = {data['phase'][idx]:.5g} deg"
+            text = (
+                rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$" "\n"
+                rf"$\left|H(j\omega)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$" "\n"
+                rf"$\varphi(\omega) = {data['phase'][idx]:.5g}^\circ$"
+            )
         elif kind == "bode_phase":
-            text = f"omega = {x[idx]:.5g} rad/s\nPhase = {y[idx]:.5g} deg\nBetrag = {data['magnitude'][idx]:.5g} dB"
+            text = (
+                rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$" "\n"
+                rf"$\varphi(\omega) = {y[idx]:.5g}^\circ$" "\n"
+                rf"$\left|H(j\omega)\right| = {data['magnitude'][idx]:.5g}\,\mathrm{{dB}}$"
+            )
         else:
-            text = f"t = {x[idx]:.5g} s\ny = {y[idx]:.5g}"
+            text = (
+                rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
+                rf"$y(t) = {y[idx]:.5g}$" "\n"
+                rf"$u(t) = {data['input_signal'][idx]:.5g}$"
+            )
 
         changed_canvases = {event.canvas}
         for hover_ax, annotation in self._hover_annotations.items():
@@ -604,6 +709,7 @@ class ControlExplorerApp(tk.Tk):
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
+        step_amplitude = float(eval(self.step_amplitude_var.get(), env, env))
 
         pade_order = int(float(eval(self.pade_order_var.get(), env, env)))
 
@@ -617,6 +723,8 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("t_max muss > 0 sein.")
         if t_points < 10:
             raise ValueError("Die Anzahl der Zeitpunkte muss mindestens 10 sein.")
+        if not np.isfinite(step_amplitude):
+            raise ValueError("Der Sprungfaktor muss eine endliche Zahl sein.")
         if pade_order < 0:
             raise ValueError("Die Padé-Ordnung muss >= 0 sein.")
 
@@ -637,6 +745,7 @@ class ControlExplorerApp(tk.Tk):
             "bode_x_min": bode_x_min,
             "bode_x_max": bode_x_max,
             "t": t,
+            "step_amplitude": step_amplitude,
             "pade_order": pade_order,
             "markers": markers,
         }
@@ -825,7 +934,7 @@ class ControlExplorerApp(tk.Tk):
             elif active_tab == 1:
                 self._plot_bode(omega_out, H_freq)
             elif active_tab == 2:
-                self._plot_step(sys_time, data["t"])
+                self._plot_step(sys_time, data["t"], data["step_amplitude"])
             else:
                 self._update_info(data, omega_out, L, H_freq, sys_time)
 
@@ -1031,7 +1140,7 @@ class ControlExplorerApp(tk.Tk):
 
         return "".join(terms) if terms else "0"
 
-    def _plot_step(self, sys_time, t):
+    def _plot_step(self, sys_time, t, step_amplitude):
         ax = self.ax_step
         ax.clear()
         self._hover_data.pop(ax, None)
@@ -1039,9 +1148,28 @@ class ControlExplorerApp(tk.Tk):
 
         try:
             tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
-            y = np.squeeze(yout)
-            ax.plot(tout, y, linewidth=2)
-            self._register_hover(ax, "step", tout, y)
+            y = step_amplitude * np.squeeze(yout)
+            pre_duration = max(0.1 * float(tout[-1]), np.finfo(float).eps)
+            pre_points = max(2, min(200, len(tout) // 10))
+            t_before = np.linspace(-pre_duration, 0.0, pre_points, endpoint=False)
+
+            t_plot = np.concatenate((t_before, tout))
+            y_plot = np.concatenate((np.zeros_like(t_before), y))
+            input_signal = np.concatenate(
+                (np.zeros_like(t_before), np.full_like(tout, step_amplitude, dtype=float))
+            )
+
+            ax.plot(t_plot, y_plot, linewidth=2, label=r"$y(t)$")
+            ax.step(
+                t_plot,
+                input_signal,
+                where="post",
+                color="black",
+                linestyle="--",
+                linewidth=1.4,
+                label=r"$u(t)$",
+            )
+            self._register_hover(ax, "step", t_plot, y_plot, input_signal=input_signal)
         except Exception as exc:
             self._control_warnings.append(f"step_response: {exc}")
             ax.text(
@@ -1060,6 +1188,8 @@ class ControlExplorerApp(tk.Tk):
         ax.set_ylabel(r"$y(t)$")
         ax.set_title("Sprungantwort")
         ax.grid(self.grid_var.get())
+        if ax.lines:
+            ax.legend(loc="best")
 
         self.fig_step.tight_layout()
         self.canvas_step.draw_idle()
@@ -1072,6 +1202,7 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append("")
         text_lines.append(f"Plot-System: {self.plot_system_var.get()}")
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
+        text_lines.append(f"Sprungfaktor: {data['step_amplitude']:.8g}")
         text_lines.append(f"Padé-Ordnung für Zeitbereich: {data['pade_order']}")
         text_lines.append("")
         text_lines.append("Rationaler Anteil:")
@@ -1097,7 +1228,8 @@ class ControlExplorerApp(tk.Tk):
 
         # Step response information
         try:
-            info = self._call_control("step_info", ct.step_info, sys_time, T=data["t"])
+            scaled_sys_time = data["step_amplitude"] * sys_time
+            info = self._call_control("step_info", ct.step_info, scaled_sys_time, T=data["t"])
             text_lines.append("Step-Info:")
             for key, value in info.items():
                 text_lines.append(f"  {key}: {value}")
