@@ -1,11 +1,15 @@
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
+import json
+import os
+from pathlib import Path
 import traceback
 import warnings
 
 import numpy as np
+import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -29,6 +33,26 @@ class ControlExplorerApp(tk.Tk):
     SYSTEM_CLOSED = r"Geschlossener Kreis G(s)"
     SYSTEM_SENS = "Sensitivitaet S(s)"
 
+    DEFAULT_SETTINGS = {
+        "omega_min": "0",
+        "omega_max": "30",
+        "n_points": "6000",
+        "bode_x_min": "1e-1",
+        "bode_x_max": "1e3",
+        "t_max": "20",
+        "t_points": "2000",
+        "pade_order": "6",
+        "marker_omega": "0, 1",
+        "plot_system": SYSTEM_OPEN,
+        "auto_update": True,
+        "grid": True,
+        "equal_axis": True,
+        "show_negative_freq": False,
+        "show_critical_point": True,
+        "normalized_nyquist": False,
+        "direction_arrow_omegas": "1, 5, 10, 20",
+    }
+
     def __init__(self):
         super().__init__()
 
@@ -39,13 +63,24 @@ class ControlExplorerApp(tk.Tk):
         self._after_id = None
         self._is_updating = False
         self._settings_window = None
+        self._settings_save_after_id = None
+        self._loading_settings = False
         self._last_warning_text = ""
         self._control_warnings = []
+        self._hover_data = {}
+        self._hover_annotations = {}
+        self._sisotool_result = None
+
+        appdata = Path(os.environ.get("APPDATA", Path.home()))
+        self.settings_path = appdata / "ControlExplorer" / "settings.json"
+        self.examples_dir = Path(__file__).resolve().parent / "examples"
 
         self._create_variables()
+        self._load_settings()
         self._create_menu()
         self._create_layout()
         self._bind_events()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.schedule_update()
 
@@ -53,25 +88,105 @@ class ControlExplorerApp(tk.Tk):
     # GUI construction
     # ------------------------------------------------------------------
     def _create_variables(self):
-        self.omega_min_var = tk.StringVar(value="0")
-        self.omega_max_var = tk.StringVar(value="30")
-        self.n_points_var = tk.StringVar(value="6000")
+        defaults = self.DEFAULT_SETTINGS
+        self.omega_min_var = tk.StringVar(value=defaults["omega_min"])
+        self.omega_max_var = tk.StringVar(value=defaults["omega_max"])
+        self.n_points_var = tk.StringVar(value=defaults["n_points"])
+        self.bode_x_min_var = tk.StringVar(value=defaults["bode_x_min"])
+        self.bode_x_max_var = tk.StringVar(value=defaults["bode_x_max"])
 
-        self.t_max_var = tk.StringVar(value="20")
-        self.t_points_var = tk.StringVar(value="2000")
+        self.t_max_var = tk.StringVar(value=defaults["t_max"])
+        self.t_points_var = tk.StringVar(value=defaults["t_points"])
 
-        self.pade_order_var = tk.StringVar(value="6")
-        self.marker_omega_var = tk.StringVar(value="0, 1")
+        self.pade_order_var = tk.StringVar(value=defaults["pade_order"])
+        self.marker_omega_var = tk.StringVar(value=defaults["marker_omega"])
 
-        self.plot_system_var = tk.StringVar(value=self.SYSTEM_OPEN)
-        self.auto_update_var = tk.BooleanVar(value=True)
-        self.grid_var = tk.BooleanVar(value=True)
-        self.equal_axis_var = tk.BooleanVar(value=True)
-        self.show_negative_freq_var = tk.BooleanVar(value=False)
-        self.show_critical_point_var = tk.BooleanVar(value=True)
-        self.normalized_nyquist_var = tk.BooleanVar(value=False)
-        self.direction_arrow_count_var = tk.StringVar(value="4")
-        self.direction_arrow_positions_var = tk.StringVar(value="1, 5, 10, 20")
+        self.plot_system_var = tk.StringVar(value=defaults["plot_system"])
+        self.auto_update_var = tk.BooleanVar(value=defaults["auto_update"])
+        self.grid_var = tk.BooleanVar(value=defaults["grid"])
+        self.equal_axis_var = tk.BooleanVar(value=defaults["equal_axis"])
+        self.show_negative_freq_var = tk.BooleanVar(value=defaults["show_negative_freq"])
+        self.show_critical_point_var = tk.BooleanVar(value=defaults["show_critical_point"])
+        self.normalized_nyquist_var = tk.BooleanVar(value=defaults["normalized_nyquist"])
+        self.direction_arrow_positions_var = tk.StringVar(value=defaults["direction_arrow_omegas"])
+
+    def _settings_variables(self):
+        return {
+            "omega_min": self.omega_min_var,
+            "omega_max": self.omega_max_var,
+            "n_points": self.n_points_var,
+            "bode_x_min": self.bode_x_min_var,
+            "bode_x_max": self.bode_x_max_var,
+            "t_max": self.t_max_var,
+            "t_points": self.t_points_var,
+            "pade_order": self.pade_order_var,
+            "marker_omega": self.marker_omega_var,
+            "plot_system": self.plot_system_var,
+            "auto_update": self.auto_update_var,
+            "grid": self.grid_var,
+            "equal_axis": self.equal_axis_var,
+            "show_negative_freq": self.show_negative_freq_var,
+            "show_critical_point": self.show_critical_point_var,
+            "normalized_nyquist": self.normalized_nyquist_var,
+            "direction_arrow_omegas": self.direction_arrow_positions_var,
+        }
+
+    def _settings_snapshot(self):
+        return {key: variable.get() for key, variable in self._settings_variables().items()}
+
+    def _apply_settings(self, settings):
+        self._loading_settings = True
+        try:
+            for key, variable in self._settings_variables().items():
+                if key in settings:
+                    variable.set(settings[key])
+        finally:
+            self._loading_settings = False
+
+    def _load_settings(self):
+        if not self.settings_path.exists():
+            return
+
+        try:
+            with self.settings_path.open("r", encoding="utf-8") as handle:
+                settings = json.load(handle)
+            if not isinstance(settings, dict):
+                raise ValueError("Die Einstellungsdatei enthaelt kein JSON-Objekt.")
+            self._apply_settings(settings)
+        except Exception as exc:
+            messagebox.showwarning(
+                "Einstellungen",
+                f"Die gespeicherten Einstellungen konnten nicht geladen werden. Werkseinstellungen werden verwendet.\n\n{exc}",
+            )
+
+    def _save_settings(self):
+        self._settings_save_after_id = None
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.settings_path.open("w", encoding="utf-8") as handle:
+                json.dump(self._settings_snapshot(), handle, indent=2, ensure_ascii=False)
+        except Exception as exc:
+            self.status_var.set(f"Einstellungen konnten nicht gespeichert werden: {exc}")
+
+    def _schedule_settings_save(self):
+        if self._loading_settings:
+            return
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+        self._settings_save_after_id = self.after(500, self._save_settings)
+
+    def reset_settings(self):
+        if not messagebox.askyesno("Werkseinstellungen", "Alle Einstellungen auf Werkseinstellungen zuruecksetzen?"):
+            return
+        self._apply_settings(self.DEFAULT_SETTINGS)
+        self._save_settings()
+        self.update_plots()
+
+    def _on_close(self):
+        if self._settings_save_after_id is not None:
+            self.after_cancel(self._settings_save_after_id)
+        self._save_settings()
+        self.destroy()
 
     def _create_menu(self):
         menu_bar = tk.Menu(self)
@@ -97,8 +212,8 @@ class ControlExplorerApp(tk.Tk):
         self._settings_window = dialog
         dialog.title("Einstellungen")
         dialog.transient(self)
-        dialog.geometry("430x360")
-        dialog.minsize(390, 320)
+        dialog.geometry("540x470")
+        dialog.minsize(500, 420)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
         dialog.protocol("WM_DELETE_WINDOW", lambda: self._close_settings_window(dialog))
@@ -128,7 +243,8 @@ class ControlExplorerApp(tk.Tk):
         button_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         button_frame.columnconfigure(0, weight=1)
         ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="w")
-        ttk.Button(button_frame, text="Schliessen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=1, sticky="e")
+        ttk.Button(button_frame, text="Werkseinstellungen", command=self.reset_settings).grid(row=0, column=1, padx=6)
+        ttk.Button(button_frame, text="Schliessen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=2, sticky="e")
 
     def _close_settings_window(self, dialog):
         if dialog.winfo_exists():
@@ -153,12 +269,26 @@ class ControlExplorerApp(tk.Tk):
         ttk.Button(parent, text="SISO Tool öffnen", command=self.open_sisotool).grid(row=3, column=0, sticky="w", pady=(12, 0))
 
     def _create_frequency_settings(self, parent):
-        self._add_entry(parent, "omega_min", self.omega_min_var, 0, 0)
-        self._add_entry(parent, "omega_max", self.omega_max_var, 1, 0)
-        self._add_entry(parent, "Punkte", self.n_points_var, 2, 0)
+        range_box = ttk.LabelFrame(parent, text="Berechnungsbereich der Ortskurve")
+        range_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        range_box.columnconfigure(0, weight=1)
+        self._add_entry(range_box, "omega_min", self.omega_min_var, 0, 0)
+        self._add_entry(range_box, "omega_max", self.omega_max_var, 1, 0)
+        self._add_entry(range_box, "Punkte", self.n_points_var, 2, 0)
+
+        bode_box = ttk.LabelFrame(parent, text="Bode-Frequenzskala")
+        bode_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        bode_box.columnconfigure(0, weight=1)
+        self._add_entry(bode_box, "Linke Grenze", self.bode_x_min_var, 0, 0)
+        self._add_entry(bode_box, "Rechte Grenze", self.bode_x_max_var, 1, 0)
+        ttk.Label(
+            bode_box,
+            text="Beispiel: 1e-1 bis 1e3 entspricht 10^-1 bis 10^3 rad/s.",
+            foreground="#555555",
+        ).grid(row=2, column=0, sticky="w", padx=6, pady=(2, 6))
 
         marker_frame = ttk.Frame(parent)
-        marker_frame.grid(row=3, column=0, sticky="ew", padx=6, pady=3)
+        marker_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=3)
         marker_frame.columnconfigure(1, weight=1)
         ttk.Label(marker_frame, text="Marker-omega").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Entry(marker_frame, textvariable=self.marker_omega_var).grid(row=0, column=1, sticky="ew")
@@ -167,20 +297,42 @@ class ControlExplorerApp(tk.Tk):
         self._add_entry(parent, "t_max", self.t_max_var, 0, 0)
         self._add_entry(parent, "Punkte", self.t_points_var, 1, 0)
         self._add_entry(parent, "Pade-Ordnung", self.pade_order_var, 2, 0)
+        ttk.Label(
+            parent,
+            text=(
+                "Die Pade-Ordnung ersetzt die Totzeit fuer Zeitbereich und SISO Tool durch eine rationale Naeherung. "
+                "Kleine Werte rechnen schneller, bilden die Totzeit aber grober ab. Groessere Werte sind im relevanten "
+                "Frequenzbereich genauer, erhoehen jedoch Systemordnung, Rechenzeit und das Risiko numerischer Probleme. "
+                "Werte zwischen 3 und 8 sind meist ein sinnvoller Ausgangspunkt."
+            ),
+            wraplength=460,
+            justify="left",
+            foreground="#555555",
+        ).grid(row=3, column=0, sticky="w", padx=6, pady=(10, 0))
 
     def _create_nyquist_settings(self, parent):
         ttk.Checkbutton(parent, text="axis equal", variable=self.equal_axis_var, command=self.schedule_update).grid(row=0, column=0, sticky="w", pady=3)
-        ttk.Checkbutton(parent, text="negative Frequenzen spiegeln", variable=self.show_negative_freq_var, command=self.schedule_update).grid(row=1, column=0, sticky="w", pady=3)
-        ttk.Checkbutton(parent, text="kritischen Punkt -1 zeigen", variable=self.show_critical_point_var, command=self.schedule_update).grid(row=2, column=0, sticky="w", pady=3)
-        ttk.Checkbutton(parent, text="normierte Ortskurve ohne Zahlen/Raster", variable=self.normalized_nyquist_var, command=self.schedule_update).grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Label(
+            parent,
+            text="Gleiche Skalierung: Eine Einheit auf Real- und Imaginaerachse wird gleich lang dargestellt; die Ortskurve wird nicht geometrisch verzerrt.",
+            wraplength=460,
+            justify="left",
+            foreground="#555555",
+        ).grid(row=1, column=0, sticky="w", padx=(22, 0), pady=(0, 6))
+        ttk.Checkbutton(parent, text="negative Frequenzen spiegeln", variable=self.show_negative_freq_var, command=self.schedule_update).grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="kritischen Punkt -1 zeigen", variable=self.show_critical_point_var, command=self.schedule_update).grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Checkbutton(parent, text="normierte Ortskurve ohne Zahlen/Raster", variable=self.normalized_nyquist_var, command=self.schedule_update).grid(row=4, column=0, sticky="w", pady=3)
 
         arrow_frame = ttk.LabelFrame(parent, text="Richtungspfeile")
-        arrow_frame.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        arrow_frame.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         arrow_frame.columnconfigure(1, weight=1)
-        ttk.Label(arrow_frame, text="Anzahl").grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        ttk.Entry(arrow_frame, textvariable=self.direction_arrow_count_var, width=8).grid(row=0, column=1, sticky="w", padx=6, pady=4)
-        ttk.Label(arrow_frame, text="omega-Werte").grid(row=1, column=0, sticky="w", padx=6, pady=4)
-        ttk.Entry(arrow_frame, textvariable=self.direction_arrow_positions_var).grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        ttk.Label(arrow_frame, text="omega-Werte").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(arrow_frame, textvariable=self.direction_arrow_positions_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        ttk.Label(
+            arrow_frame,
+            text="Ein Pfeil pro angegebenem omega-Wert, getrennt durch Kommas.",
+            foreground="#555555",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
 
     def _create_layout(self):
         self.columnconfigure(0, weight=1)
@@ -243,11 +395,11 @@ class ControlExplorerApp(tk.Tk):
         button_frame.grid(row=7, column=0, sticky="ew", pady=(4, 8))
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
-        button_frame.columnconfigure(2, weight=1)
 
-        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(button_frame, text="Einstellungen", command=self._open_settings_window).grid(row=0, column=1, sticky="ew", padx=4)
-        ttk.Button(button_frame, text="Beispiel laden", command=self.load_default_example).grid(row=0, column=2, sticky="ew", padx=(4, 0))
+        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 4))
+        ttk.Button(button_frame, text="Einstellungen", command=self._open_settings_window).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=(0, 4))
+        ttk.Button(button_frame, text="Beispiel speichern", command=self.save_example).grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(4, 0))
+        ttk.Button(button_frame, text="Beispiel laden", command=self.load_example).grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(4, 0))
 
         help_text = (
             "Eingabehinweise:\n"
@@ -289,6 +441,9 @@ class ControlExplorerApp(tk.Tk):
         self.ax_step = self.fig_step.add_subplot(111)
         self.canvas_step = self._embed_figure(self.tab_step, self.fig_step)
 
+        for canvas in (self.canvas_nyquist, self.canvas_bode, self.canvas_step):
+            canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
+
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
         self.info_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.info_text.configure(state=tk.DISABLED)
@@ -301,6 +456,75 @@ class ControlExplorerApp(tk.Tk):
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         return canvas
 
+    def _register_hover(self, ax, kind, x, y, **extra):
+        annotation = ax.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(12, 12),
+            textcoords="offset points",
+            bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.95},
+            arrowprops={"arrowstyle": "->", "color": "#555555"},
+            fontsize=9,
+            zorder=20,
+        )
+        annotation.set_visible(False)
+        self._hover_annotations[ax] = annotation
+        self._hover_data[ax] = {
+            "kind": kind,
+            "x": np.asarray(x),
+            "y": np.asarray(y),
+            **extra,
+        }
+
+    def _on_plot_hover(self, event):
+        ax = event.inaxes
+        if ax not in self._hover_data or event.xdata is None or event.ydata is None:
+            changed_canvases = set()
+            for annotation in self._hover_annotations.values():
+                if annotation.get_visible():
+                    annotation.set_visible(False)
+                    changed_canvases.add(annotation.figure.canvas)
+            for canvas in changed_canvases:
+                canvas.draw_idle()
+            return
+
+        data = self._hover_data[ax]
+        x = data["x"]
+        y = data["y"]
+        if not x.size:
+            return
+
+        if data["kind"].startswith("bode") and event.xdata > 0:
+            idx = int(np.argmin(np.abs(np.log10(x) - np.log10(event.xdata))))
+        else:
+            x_span = max(abs(ax.get_xlim()[1] - ax.get_xlim()[0]), np.finfo(float).eps)
+            y_span = max(abs(ax.get_ylim()[1] - ax.get_ylim()[0]), np.finfo(float).eps)
+            idx = int(np.argmin(((x - event.xdata) / x_span) ** 2 + ((y - event.ydata) / y_span) ** 2))
+
+        kind = data["kind"]
+        if kind == "nyquist":
+            omega = data["omega"][idx]
+            text = f"omega = {omega:.5g} rad/s\nRe = {x[idx]:.5g}\nIm = {y[idx]:.5g}\n|H| = {abs(complex(x[idx], y[idx])):.5g}"
+        elif kind == "bode_mag":
+            text = f"omega = {x[idx]:.5g} rad/s\nBetrag = {y[idx]:.5g} dB\nPhase = {data['phase'][idx]:.5g} deg"
+        elif kind == "bode_phase":
+            text = f"omega = {x[idx]:.5g} rad/s\nPhase = {y[idx]:.5g} deg\nBetrag = {data['magnitude'][idx]:.5g} dB"
+        else:
+            text = f"t = {x[idx]:.5g} s\ny = {y[idx]:.5g}"
+
+        changed_canvases = {event.canvas}
+        for hover_ax, annotation in self._hover_annotations.items():
+            should_be_visible = hover_ax is ax
+            if annotation.get_visible() != should_be_visible:
+                annotation.set_visible(should_be_visible)
+                changed_canvases.add(annotation.figure.canvas)
+
+        annotation = self._hover_annotations[ax]
+        annotation.xy = (x[idx], y[idx])
+        annotation.set_text(text)
+        for canvas in changed_canvases:
+            canvas.draw_idle()
+
     def _add_entry(self, parent, label, variable, row, col):
         frame = ttk.Frame(parent)
         frame.grid(row=row, column=col, sticky="ew", padx=6, pady=3)
@@ -309,32 +533,21 @@ class ControlExplorerApp(tk.Tk):
         ttk.Entry(frame, textvariable=variable, width=14).grid(row=0, column=1, sticky="ew")
 
     def _bind_events(self):
-        variables = [
-            self.omega_min_var,
-            self.omega_max_var,
-            self.n_points_var,
-            self.t_max_var,
-            self.t_points_var,
-            self.pade_order_var,
-            self.marker_omega_var,
-            self.delay_var,
-            self.plot_system_var,
-            self.direction_arrow_count_var,
-            self.direction_arrow_positions_var,
-            self.auto_update_var,
-            self.grid_var,
-            self.equal_axis_var,
-            self.show_negative_freq_var,
-            self.show_critical_point_var,
-            self.normalized_nyquist_var,
-        ]
-        for var in variables:
-            var.trace_add("write", lambda *_: self.schedule_update())
+        for variable in self._settings_variables().values():
+            variable.trace_add("write", lambda *_: self._on_setting_changed())
+
+        self.delay_var.trace_add("write", lambda *_: self.schedule_update())
 
         self.params_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
         self.system_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
 
         self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.schedule_update())
+
+    def _on_setting_changed(self):
+        if self._loading_settings:
+            return
+        self._schedule_settings_save()
+        self.schedule_update()
 
     # ------------------------------------------------------------------
     # Parsing and computation
@@ -386,6 +599,8 @@ class ControlExplorerApp(tk.Tk):
         omega_min = float(eval(self.omega_min_var.get(), env, env))
         omega_max = float(eval(self.omega_max_var.get(), env, env))
         n_points = int(float(eval(self.n_points_var.get(), env, env)))
+        bode_x_min = float(eval(self.bode_x_min_var.get(), env, env))
+        bode_x_max = float(eval(self.bode_x_max_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
@@ -396,6 +611,8 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("ω_max muss größer als ω_min sein.")
         if n_points < 10:
             raise ValueError("Die Anzahl der Frequenzpunkte muss mindestens 10 sein.")
+        if bode_x_min <= 0 or bode_x_max <= bode_x_min:
+            raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
         if t_max <= 0:
             raise ValueError("t_max muss > 0 sein.")
         if t_points < 10:
@@ -404,6 +621,7 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Die Padé-Ordnung muss >= 0 sein.")
 
         omega = np.linspace(omega_min, omega_max, n_points)
+        bode_omega = np.logspace(np.log10(bode_x_min), np.log10(bode_x_max), n_points)
         t = np.linspace(0.0, t_max, t_points)
 
         markers = self._parse_marker_frequencies(env)
@@ -415,6 +633,9 @@ class ControlExplorerApp(tk.Tk):
             "sys_rational": sys_rational,
             "delay": delay,
             "omega": omega,
+            "bode_omega": bode_omega,
+            "bode_x_min": bode_x_min,
+            "bode_x_max": bode_x_max,
             "t": t,
             "pade_order": pade_order,
             "markers": markers,
@@ -450,17 +671,7 @@ class ControlExplorerApp(tk.Tk):
                 markers.append(val)
         return markers
 
-    def _parse_direction_arrow_settings(self, omega):
-        try:
-            count = int(float(self.direction_arrow_count_var.get().strip() or "0"))
-        except ValueError as exc:
-            raise ValueError("Die Anzahl der Richtungspfeile muss eine Zahl sein.") from exc
-
-        if count < 0:
-            raise ValueError("Die Anzahl der Richtungspfeile muss >= 0 sein.")
-        if count == 0:
-            return []
-
+    def _parse_direction_arrow_settings(self):
         env = self._base_eval_environment()
         positions = []
         for part in self.direction_arrow_positions_var.get().split(","):
@@ -470,22 +681,7 @@ class ControlExplorerApp(tk.Tk):
             value = float(eval(part, env, env))
             if value >= 0.0:
                 positions.append(value)
-
-        if not positions:
-            positive_omega = omega[omega > 0]
-            if positive_omega.size:
-                positions = np.linspace(float(positive_omega[0]), float(positive_omega[-1]), count + 2)[1:-1].tolist()
-            else:
-                return []
-
-        if len(positions) < count:
-            positive_omega = omega[omega > 0]
-            if not positive_omega.size:
-                return positions[:count]
-            extra = np.linspace(float(positive_omega[0]), float(positive_omega[-1]), count + 2)[1:-1].tolist()
-            positions.extend(pos for pos in extra if pos not in positions)
-
-        return positions[:count]
+        return positions
 
     def _frequency_response_exact_delay(self, sys_rational, omega, delay):
         mag, phase, omega_out = self._call_control("frequency_response", ct.frequency_response, sys_rational, omega)
@@ -546,10 +742,14 @@ class ControlExplorerApp(tk.Tk):
                     delay_tf = self._call_control("tf fuer sisotool-Totzeit", ct.tf, num_delay, den_delay)
                     sys_for_tool = sys_for_tool * delay_tf
 
-            sisotool_omega = data["omega"][data["omega"] > 0]
-            if not sisotool_omega.size:
-                raise ValueError("Fuer ct.sisotool muss mindestens ein omega > 0 im Frequenzbereich liegen.")
-            self._call_control("sisotool", ct.sisotool, sys_for_tool, omega=sisotool_omega, tvect=data["t"])
+            self._sisotool_result = self._call_control(
+                "sisotool",
+                ct.sisotool,
+                sys_for_tool,
+                omega_limits=[data["bode_x_min"], data["bode_x_max"]],
+                tvect=data["t"],
+            )
+            plt.show(block=False)
             self._show_control_warnings_if_needed()
         except Exception as exc:
             messagebox.showerror("SISO Tool", f"ct.sisotool konnte nicht gestartet werden:\n\n{exc}")
@@ -595,6 +795,8 @@ class ControlExplorerApp(tk.Tk):
         )
 
     def update_plots(self):
+        if self._after_id is not None:
+            self.after_cancel(self._after_id)
         self._after_id = None
         self._is_updating = True
         self._control_warnings = []
@@ -604,8 +806,11 @@ class ControlExplorerApp(tk.Tk):
             self._update_latex_preview(data)
             active_tab = self.notebook.index(self.notebook.select())
 
-            if active_tab in (0, 1, 3):
+            if active_tab in (0, 3):
                 omega_out, L = self._frequency_response_exact_delay(data["sys_rational"], data["omega"], data["delay"])
+                H_freq = self._selected_frequency_system(L)
+            elif active_tab == 1:
+                omega_out, L = self._frequency_response_exact_delay(data["sys_rational"], data["bode_omega"], data["delay"])
                 H_freq = self._selected_frequency_system(L)
             else:
                 omega_out = L = H_freq = None
@@ -701,6 +906,7 @@ class ControlExplorerApp(tk.Tk):
         ax.set_title("Normierte Nyquist-Ortskurve" if normalized else "Nyquist-Ortskurve")
         if not normalized:
             ax.legend(loc="best", fontsize=8)
+        self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(omega))
         self.fig_nyquist.tight_layout()
         self.canvas_nyquist.draw_idle()
 
@@ -709,7 +915,7 @@ class ControlExplorerApp(tk.Tk):
         if n < 30:
             return
 
-        indices = [int(np.argmin(np.abs(omega - w_arrow))) for w_arrow in self._parse_direction_arrow_settings(omega)]
+        indices = [int(np.argmin(np.abs(omega - w_arrow))) for w_arrow in self._parse_direction_arrow_settings()]
         used = set()
 
         for i in indices:
@@ -760,9 +966,11 @@ class ControlExplorerApp(tk.Tk):
         ax_phase.set_ylabel(r"$\arg H(j\omega)$ [deg]")
         ax_phase.grid(self.grid_var.get(), which="both")
 
-        right_limit = max(float(np.max(w)), 1.0)
-        ax_mag.set_xlim(left=1e-1, right=right_limit)
-        ax_phase.set_xlim(left=1e-1, right=right_limit)
+        ax_mag.set_xlim(left=float(w[0]), right=float(w[-1]))
+        ax_phase.set_xlim(left=float(w[0]), right=float(w[-1]))
+
+        self._register_hover(ax_mag, "bode_mag", w, mag_db, phase=phase_deg)
+        self._register_hover(ax_phase, "bode_phase", w, phase_deg, magnitude=mag_db)
 
         self.fig_bode.tight_layout()
         self.canvas_bode.draw_idle()
@@ -826,11 +1034,14 @@ class ControlExplorerApp(tk.Tk):
     def _plot_step(self, sys_time, t):
         ax = self.ax_step
         ax.clear()
+        self._hover_data.pop(ax, None)
+        self._hover_annotations.pop(ax, None)
 
         try:
             tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
             y = np.squeeze(yout)
             ax.plot(tout, y, linewidth=2)
+            self._register_hover(ax, "step", tout, y)
         except Exception as exc:
             self._control_warnings.append(f"step_response: {exc}")
             ax.text(
@@ -917,30 +1128,70 @@ class ControlExplorerApp(tk.Tk):
         )
         self.info_text.configure(state=tk.DISABLED)
 
-    def load_default_example(self):
-        self.params_text.delete("1.0", tk.END)
-        self.params_text.insert(
-            "1.0",
-            "K_R = 2.0\n"
-            "T_t = np.pi / 4\n"
+    def _example_snapshot(self):
+        return {
+            "format": "control-explorer-example",
+            "version": 1,
+            "parameters": self.params_text.get("1.0", tk.END).strip(),
+            "system": self.system_text.get("1.0", tk.END).strip(),
+            "delay": self.delay_var.get(),
+            "settings": self._settings_snapshot(),
+        }
+
+    def save_example(self):
+        try:
+            self.examples_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        filename = filedialog.asksaveasfilename(
+            parent=self,
+            title="Beispiel speichern",
+            initialdir=str(self.examples_dir if self.examples_dir.exists() else Path(__file__).resolve().parent),
+            defaultextension=".json",
+            filetypes=[("Control-Explorer-Beispiel", "*.json"), ("Alle Dateien", "*.*")],
         )
+        if not filename:
+            return
 
-        self.system_text.delete("1.0", tk.END)
-        self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
+        try:
+            with Path(filename).open("w", encoding="utf-8") as handle:
+                json.dump(self._example_snapshot(), handle, indent=2, ensure_ascii=False)
+            self.status_var.set(f"Beispiel gespeichert: {Path(filename).name}")
+        except Exception as exc:
+            messagebox.showerror("Beispiel speichern", f"Das Beispiel konnte nicht gespeichert werden:\n\n{exc}")
 
-        self.delay_var.set("T_t")
-        self.omega_min_var.set("0")
-        self.omega_max_var.set("30")
-        self.n_points_var.set("6000")
-        self.t_max_var.set("20")
-        self.t_points_var.set("2000")
-        self.pade_order_var.set("6")
-        self.marker_omega_var.set("0, 1")
-        self.plot_system_var.set(self.SYSTEM_OPEN)
-        self.normalized_nyquist_var.set(False)
-        self.direction_arrow_count_var.set("4")
-        self.direction_arrow_positions_var.set("1, 5, 10, 20")
-        self.schedule_update()
+    def load_example(self):
+        filename = filedialog.askopenfilename(
+            parent=self,
+            title="Beispiel laden",
+            initialdir=str(self.examples_dir if self.examples_dir.exists() else Path(__file__).resolve().parent),
+            filetypes=[("Control-Explorer-Beispiel", "*.json"), ("Alle Dateien", "*.*")],
+        )
+        if not filename:
+            return
+
+        try:
+            with Path(filename).open("r", encoding="utf-8") as handle:
+                example = json.load(handle)
+            if example.get("format") != "control-explorer-example":
+                raise ValueError("Die Datei ist kein Control-Explorer-Beispiel.")
+
+            self.params_text.delete("1.0", tk.END)
+            self.params_text.insert("1.0", example.get("parameters", ""))
+            self.system_text.delete("1.0", tk.END)
+            self.system_text.insert("1.0", example.get("system", ""))
+            self.delay_var.set(example.get("delay", "0"))
+
+            settings = example.get("settings")
+            if isinstance(settings, dict):
+                self._apply_settings(settings)
+                self._save_settings()
+
+            self.status_var.set(f"Beispiel geladen: {Path(filename).name}")
+            self.update_plots()
+        except Exception as exc:
+            messagebox.showerror("Beispiel laden", f"Das Beispiel konnte nicht geladen werden:\n\n{exc}")
 
 
 if __name__ == "__main__":

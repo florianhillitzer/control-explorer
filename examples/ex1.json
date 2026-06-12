@@ -1,0 +1,26 @@
+{
+  "format": "control-explorer-example",
+  "version": 1,
+  "parameters": "K_R = 2.0\nT_t = np.pi / 4\n\n# Beispiele:\n# T1 = 1.0\n# Kp = 1.5",
+  "system": "K_R / (s**3 + 3*s**2 + 3*s + 1)",
+  "delay": "T_t",
+  "settings": {
+    "omega_min": "0",
+    "omega_max": "30",
+    "n_points": "6000",
+    "bode_x_min": "1e-1",
+    "bode_x_max": "1e2",
+    "t_max": "20",
+    "t_points": "2000",
+    "pade_order": "6",
+    "marker_omega": "0, 1",
+    "plot_system": "Offener Kreis G_0(s)",
+    "auto_update": true,
+    "grid": true,
+    "equal_axis": true,
+    "show_negative_freq": false,
+    "show_critical_point": true,
+    "normalized_nyquist": false,
+    "direction_arrow_omegas": "0.5, 2, 5 "
+  }
+}
