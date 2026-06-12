@@ -18,7 +18,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 import control as ct
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
+import io
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 try:
     from matplotlib.backends._backend_tk import add_tooltip
@@ -108,6 +110,33 @@ class ControlExplorerApp(tk.Tk):
 
         self.schedule_update()
 
+        # wichtig: nach GUI-Aufbau Icon nochmal setzen und dann anzeigen
+        self.after(80, self._set_window_icon)
+        self.after(120, self.deiconify)
+
+    def _resource_path(self, filename):
+        candidates = []
+
+        if getattr(sys, "frozen", False):
+            # PyInstaller onefile / onedir internal bundle
+            if hasattr(sys, "_MEIPASS"):
+                candidates.append(Path(sys._MEIPASS) / filename)
+
+            # Neben der exe
+            candidates.append(Path(sys.executable).resolve().parent / filename)
+
+            # PyInstaller 6 onedir: häufig _internal
+            candidates.append(Path(sys.executable).resolve().parent / "_internal" / filename)
+
+        # Entwicklungsmodus
+        candidates.append(Path(__file__).resolve().parent / filename)
+
+        for path in candidates:
+            if path.exists():
+                return path
+
+        return candidates[0]
+
     @staticmethod
     def _set_windows_app_id():
         if os.name != "nt":
@@ -120,9 +149,8 @@ class ControlExplorerApp(tk.Tk):
             pass
 
     def _set_window_icon(self):
-        app_dir = Path(__file__).resolve().parent
-        png_path = app_dir / "control_explorer_icon.png"
-        ico_path = app_dir / "control_explorer.ico"
+        png_path = self._resource_path("control_explorer_icon.png")
+        ico_path = self._resource_path("control_explorer.ico")
 
         try:
             if png_path.exists():
@@ -475,9 +503,17 @@ class ControlExplorerApp(tk.Tk):
         title = ttk.Label(parent, text="Eingaben", font=("Segoe UI", 12, "bold"))
         title.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Label(parent, text="Parametercode").grid(row=1, column=0, sticky="w")
+        ttk.Label(
+            parent,
+            text="Rationaler Anteil G₀(s)"
+        ).grid(row=1, column=0, sticky="w")
+        self.system_text = ScrolledText(parent, height=5, width=48, wrap=tk.WORD)
+        self.system_text.grid(row=2, column=0, sticky="nsew", pady=(2, 8))
+        self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
+
+        ttk.Label(parent, text="Parametercode").grid(row=3, column=0, sticky="w")
         self.params_text = ScrolledText(parent, height=7, width=48, wrap=tk.NONE)
-        self.params_text.grid(row=2, column=0, sticky="nsew", pady=(2, 8))
+        self.params_text.grid(row=4, column=0, sticky="nsew", pady=(2, 8))
         self.params_text.insert(
             "1.0",
             "K_R = 2.0\n"
@@ -487,27 +523,22 @@ class ControlExplorerApp(tk.Tk):
             "# T1 = 1.0\n"
             "# Kp = 1.5\n"
         )
-
-        ttk.Label(parent, text="Rationaler Anteil G_0,rational(s)").grid(row=3, column=0, sticky="w")
-        self.system_text = ScrolledText(parent, height=5, width=48, wrap=tk.WORD)
-        self.system_text.grid(row=4, column=0, sticky="nsew", pady=(2, 8))
-        self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
-
-        self.fig_latex = Figure(figsize=(4.8, 1.95), dpi=100)
+        ttk.Label(parent, text="Übertragungsfunktionen").grid(row=5, column=0, sticky="w")
+        self.fig_latex = Figure(figsize=(4.8, 1.65), dpi=100)
         self.ax_latex = self.fig_latex.add_subplot(111)
         self.ax_latex.axis("off")
         self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
-        self.canvas_latex.get_tk_widget().grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        self.canvas_latex.get_tk_widget().grid(row=6, column=0, sticky="ew", pady=(0, 8))
 
         delay_frame = ttk.Frame(parent)
-        delay_frame.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        delay_frame.grid(row=7, column=0, sticky="ew", pady=(0, 8))
         delay_frame.columnconfigure(1, weight=1)
         ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.delay_var = tk.StringVar(value="T_t")
         ttk.Entry(delay_frame, textvariable=self.delay_var).grid(row=0, column=1, sticky="ew")
 
         button_frame = ttk.Frame(parent)
-        button_frame.grid(row=7, column=0, sticky="ew", pady=(4, 8))
+        button_frame.grid(row=8, column=0, sticky="ew", pady=(4, 8))
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
 
@@ -524,7 +555,7 @@ class ControlExplorerApp(tk.Tk):
             "- Sprungantworten nutzen Pade fuer die Totzeit.\n"
             "- Frequenzbereich, Sprungantwort und Optionen liegen im Einstellungsfenster."
         )
-        ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=8, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=9, column=0, sticky="w", pady=(4, 0))
 
     def _create_tab_plot_system_selector(self, parent, variable, hint_text=None):
         """
@@ -846,51 +877,102 @@ class ControlExplorerApp(tk.Tk):
                 self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
 
     def _draw_hover_axes(self, axes):
+        """
+        Zeichnet Hover-Annotationen performant per Blitting.
+
+        Wichtig: Die Hover-Box wird vorher so positioniert, dass sie innerhalb
+        der Achsenfläche liegt. Dadurch kann weiterhin schnell gegen ax.bbox
+        geblittet werden, ohne dass die Box am Rand abgeschnitten wird.
+        """
         for ax in set(axes):
             canvas = ax.figure.canvas
             background = self._hover_backgrounds.get(ax)
+
             if background is None:
                 canvas.draw_idle()
                 continue
+
             canvas.restore_region(background)
             annotation = self._hover_annotations.get(ax)
+
             if annotation is not None and annotation.get_visible():
                 ax.draw_artist(annotation)
-                canvas.blit(ax.bbox)
+
             canvas.blit(ax.bbox)
-                # Robust, aber etwas langsamer
-                # canvas.draw_idle()
-            # else:
-            #     # Schnelles Entfernen, wenn möglich
-            #     background = self._hover_backgrounds.get(ax)
-            #     if background is not None:
-            #         canvas.restore_region(background)
-            #         canvas.blit(ax.bbox)
-            #     else:
-            #         canvas.draw_idle()
+
 
     def _position_hover_annotation(self, ax, annotation, x_value, y_value):
         """
-        Verschiebt die Hover-Box abhängig von der Mausposition so, dass sie
-        möglichst innerhalb der sichtbaren Achse bleibt.
+        Positioniert die Hover-Box ähnlich wie ein Cursor-Tooltip.
+
+        Die Methode testet mehrere Kandidatenpositionen um den Datenpunkt
+        herum und nimmt die erste Position, bei der die gesamte Box innerhalb
+        der Achsenfläche bleibt. Dadurch klappt die Box z. B. automatisch nach
+        unten, wenn oberhalb des Punktes zu wenig Platz ist.
         """
         try:
-            x_disp, y_disp = ax.transData.transform((x_value, y_value))
+            canvas = ax.figure.canvas
+            renderer = canvas.get_renderer()
             bbox = ax.bbox
+            padding = 4
 
+            x_disp, y_disp = ax.transData.transform((x_value, y_value))
             x_frac = (x_disp - bbox.x0) / max(bbox.width, np.finfo(float).eps)
             y_frac = (y_disp - bbox.y0) / max(bbox.height, np.finfo(float).eps)
 
-            dx = -14 if x_frac > 0.65 else 14
-            dy = -14 if y_frac > 0.65 else 14
+            # Bevorzugte Richtung: weg von den nächsten Rändern.
+            horizontal_order = [1, -1] if x_frac <= 0.55 else [-1, 1]
+            vertical_order = [1, -1] if y_frac <= 0.55 else [-1, 1]
 
+            candidates = []
+            for sy in vertical_order:
+                for sx in horizontal_order:
+                    candidates.append((14 * sx, 14 * sy))
+
+            # Zusätzlich noch reine Vertikal-/Horizontalvarianten als Fallback.
+            candidates.extend([
+                (0, 18 if y_frac <= 0.5 else -18),
+                (18 if x_frac <= 0.5 else -18, 0),
+                (14, 14),
+                (14, -14),
+                (-14, 14),
+                (-14, -14),
+            ])
+
+            best = candidates[0]
+            best_overflow = float("inf")
+
+            for dx, dy in candidates:
+                annotation.set_position((dx, dy))
+                annotation.set_ha("right" if dx < 0 else "left")
+                annotation.set_va("top" if dy < 0 else "bottom")
+
+                ann_bbox = annotation.get_window_extent(renderer=renderer)
+
+                overflow_left = max(0.0, bbox.x0 + padding - ann_bbox.x0)
+                overflow_right = max(0.0, ann_bbox.x1 - (bbox.x1 - padding))
+                overflow_bottom = max(0.0, bbox.y0 + padding - ann_bbox.y0)
+                overflow_top = max(0.0, ann_bbox.y1 - (bbox.y1 - padding))
+                overflow = overflow_left + overflow_right + overflow_bottom + overflow_top
+
+                if overflow == 0:
+                    best = (dx, dy)
+                    break
+
+                if overflow < best_overflow:
+                    best_overflow = overflow
+                    best = (dx, dy)
+
+            dx, dy = best
             annotation.set_position((dx, dy))
             annotation.set_ha("right" if dx < 0 else "left")
             annotation.set_va("top" if dy < 0 else "bottom")
+
         except Exception:
             annotation.set_position((12, 12))
             annotation.set_ha("left")
             annotation.set_va("bottom")
+
 
     def _on_plot_hover(self, event):
         self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
@@ -984,8 +1066,8 @@ class ControlExplorerApp(tk.Tk):
 
         annotation = self._hover_annotations[ax]
         annotation.xy = (x[idx], y[idx])
-        self._position_hover_annotation(ax, annotation, x[idx], y[idx])
         annotation.set_text(text)
+        self._position_hover_annotation(ax, annotation, x[idx], y[idx])
         self._draw_hover_axes(changed_axes)
 
     @staticmethod
@@ -1562,10 +1644,18 @@ class ControlExplorerApp(tk.Tk):
         log_w = np.log10(np.asarray(omega, dtype=float))
         return float(np.interp(np.log10(float(omega_target)), log_w, np.asarray(values, dtype=float)))
 
-    def _find_level_crossings(self, omega, values, level):
+    def _find_level_crossings(self, omega, values, level, direction="any"):
         """
         Sucht Schnittfrequenzen y(ω)=level. Die Interpolation erfolgt in log10(ω),
         weil Bode-Diagramme logarithmisch skaliert sind.
+
+        direction:
+        - "any": alle Schnittpunkte
+        - "down": nur Schnittpunkte von oben nach unten
+        - "up": nur Schnittpunkte von unten nach oben
+
+        Für die Phasenreserve ist bei einem klassischen offenen Kreis in der
+        Regel die 0-dB-Durchtrittsfrequenz von oben nach unten relevant.
         """
         omega = np.asarray(omega, dtype=float)
         values = np.asarray(values, dtype=float)
@@ -1586,15 +1676,26 @@ class ControlExplorerApp(tk.Tk):
             d1 = diff[i + 1]
 
             if d0 == 0:
-                crossings.append(float(omega[i]))
+                if direction == "any":
+                    crossings.append(float(omega[i]))
                 continue
 
-            if d0 * d1 < 0:
-                frac = -d0 / (d1 - d0)
-                log_wc = log_w[i] + frac * (log_w[i + 1] - log_w[i])
-                crossings.append(float(10 ** log_wc))
+            is_crossing = d0 * d1 < 0
+            is_down = d0 > 0 and d1 < 0
+            is_up = d0 < 0 and d1 > 0
 
-        if diff[-1] == 0:
+            if not is_crossing:
+                continue
+            if direction == "down" and not is_down:
+                continue
+            if direction == "up" and not is_up:
+                continue
+
+            frac = -d0 / (d1 - d0)
+            log_wc = log_w[i] + frac * (log_w[i + 1] - log_w[i])
+            crossings.append(float(10 ** log_wc))
+
+        if diff[-1] == 0 and direction == "any":
             crossings.append(float(omega[-1]))
 
         # numerisch doppelte Schnittpunkte entfernen
@@ -1618,7 +1719,7 @@ class ControlExplorerApp(tk.Tk):
         mag_db = 20.0 * np.log10(mag)
         phase_deg = np.unwrap(np.angle(L_w)) * 180.0 / np.pi
 
-        gain_crossings = self._find_level_crossings(w, mag_db, 0.0)
+        gain_crossings = self._find_level_crossings(w, mag_db, 0.0, direction="down")
         phase_margin_candidates = []
         for wc in gain_crossings:
             phase_at_wc = self._interpolate_at_log_frequency(w, phase_deg, wc)
@@ -1674,6 +1775,40 @@ class ControlExplorerApp(tk.Tk):
             "phase_margin": phase_margin,
         }
 
+    def _annotate_inside_axes(self, ax, text, xy, fontsize=9):
+        """
+        Fügt eine statische Annotation mit automatischer Innenpositionierung ein.
+        Die Box wird bevorzugt nach unten/links/rechts geklappt, falls oberhalb
+        oder rechts zu wenig Platz ist.
+        """
+        try:
+            x_disp, y_disp = ax.transData.transform(xy)
+            bbox = ax.bbox
+            x_frac = (x_disp - bbox.x0) / max(bbox.width, np.finfo(float).eps)
+            y_frac = (y_disp - bbox.y0) / max(bbox.height, np.finfo(float).eps)
+
+            dx = -12 if x_frac > 0.65 else 12
+            dy = -18 if y_frac > 0.62 else 12
+            ha = "right" if dx < 0 else "left"
+            va = "top" if dy < 0 else "bottom"
+        except Exception:
+            dx, dy = 12, 12
+            ha, va = "left", "bottom"
+
+        return ax.annotate(
+            text,
+            xy=xy,
+            xytext=(dx, dy),
+            textcoords="offset points",
+            fontsize=fontsize,
+            ha=ha,
+            va=va,
+            bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.9},
+            arrowprops={"arrowstyle": "->", "color": "#555555"},
+            annotation_clip=False,
+        )
+
+
     def _plot_bode_margins(self, ax_mag, ax_phase, omega, L_open):
         margins = self._compute_bode_margins_from_response(omega, L_open)
 
@@ -1686,22 +1821,30 @@ class ControlExplorerApp(tk.Tk):
             mag_db_at_wp = gm["mag_db"]
             ax_mag.axvline(wp, linestyle=":", linewidth=1.0, color="black")
             ax_phase.axvline(wp, linestyle=":", linewidth=1.0, color="black")
-            ax_mag.plot(wp, mag_db_at_wp, "o", markersize=5)
-            ax_phase.plot(wp, gm["target_phase_deg"], "o", markersize=5)
+            ax_mag.plot(
+                wp,
+                mag_db_at_wp,
+                "o",
+                markersize=5,
+                label=r"$\omega_\pi$ für $A_R$",
+            )
+            ax_phase.plot(
+                wp,
+                gm["target_phase_deg"],
+                "o",
+                markersize=5,
+                label=r"$\omega_\pi$ für $A_R$",
+            )
             ax_mag.vlines(wp, mag_db_at_wp, 0.0, linestyle=":", linewidth=1.2, color="black")
-            ax_mag.annotate(
+            self._annotate_inside_axes(
+                ax_mag,
                 rf"$A_R={gm['gain_margin']:.3g}$"
                 "\n"
                 rf"$={gm['gain_margin_db']:.2f}\,\mathrm{{dB}}$"
                 "\n"
                 rf"$\omega_\pi={wp:.3g}$",
                 xy=(wp, mag_db_at_wp),
-                xytext=(10, 10),
-                textcoords="offset points",
                 fontsize=9,
-                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.9},
-                arrowprops={"arrowstyle": "->", "color": "#555555"},
-                annotation_clip=False,
             )
 
         pm = margins["phase_margin"]
@@ -1710,20 +1853,29 @@ class ControlExplorerApp(tk.Tk):
             phase_at_wc = pm["phase_deg"]
             ax_mag.axvline(wc, linestyle="--", linewidth=1.0, color="black")
             ax_phase.axvline(wc, linestyle="--", linewidth=1.0, color="black")
-            ax_mag.plot(wc, 0.0, "s", markersize=5)
-            ax_phase.plot(wc, phase_at_wc, "s", markersize=5)
+            ax_mag.plot(
+                wc,
+                0.0,
+                "s",
+                markersize=5,
+                label=r"$\omega_c$ für $\varphi_R$",
+            )
+
+            ax_phase.plot(
+                wc,
+                phase_at_wc,
+                "s",
+                markersize=5,
+                label=r"$\omega_c$ für $\varphi_R$",
+            )
             ax_phase.vlines(wc, -180.0, phase_at_wc, linestyle="--", linewidth=1.2, color="black")
-            ax_phase.annotate(
+            self._annotate_inside_axes(
+                ax_phase,
                 rf"$\varphi_R={pm['phase_margin_deg']:.2f}^\circ$"
                 "\n"
                 rf"$\omega_c={wc:.3g}$",
                 xy=(wc, phase_at_wc),
-                xytext=(10, 10),
-                textcoords="offset points",
                 fontsize=9,
-                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.9},
-                arrowprops={"arrowstyle": "->", "color": "#555555"},
-                annotation_clip=False,
             )
 
         if gm is None and pm is None:
