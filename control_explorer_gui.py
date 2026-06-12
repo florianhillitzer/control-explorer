@@ -1406,18 +1406,16 @@ class ControlExplorerApp(tk.Tk):
                 label="gespiegelte neg. Frequenzen",
             )
 
-        if self.show_critical_point_var.get() and self._is_open_loop_selection(selected):
+        if self.show_critical_point_var.get() and self._is_open_loop_selection(selected) and not normalized:
             # Der kritische Punkt -1 gehoert zur Nyquist-Ortskurve des offenen Kreises.
-            # Wird die Kurve normiert, muss auch der Punkt entsprechend mitskaliert werden.
+            # Wird die Kurve normiert, wird der kritische Punkt nicht angezeigt.
             critical_point = -1.0 / scale if normalized else -1.0
             critical_label = r"kritischer Punkt $-1$"
-            if normalized:
-                critical_label = r"kritischer Punkt $-1$ (mitnormiert)"
             ax.plot(critical_point, 0, "rx", markersize=10, label=critical_label)
 
         # Start/end markers
-        start_label = r"$\omega=0$" if normalized else "_nolegend_"
-        end_label = r"$\omega\to\infty$" if normalized else "_nolegend_"
+        start_label = r"$\omega=0$" #if normalized else "_nolegend_"
+        end_label = r"$\omega\to\infty$" #if normalized else "_nolegend_"
         ax.plot(plot_H.real[0], plot_H.imag[0], "o", markersize=7, label=start_label)
         ax.plot(plot_H.real[-1], plot_H.imag[-1], "d", markersize=6, label=end_label)
 
@@ -1548,31 +1546,16 @@ class ControlExplorerApp(tk.Tk):
         ax.clear()
         ax.axis("off")
 
-        open_formula = self._transfer_function_to_latex(data["sys_rational"])
-        if data["delay"] > 0:
-            open_formula = open_formula + rf"\,e^{{-{data['delay']:.4g}s}}"
-
-        if data["delay"] > 0:
-            closed_formula = rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
-        else:
-            try:
-                closed_tf = self._call_control(
-                    "feedback fuer Latex-Vorschau",
-                    ct.feedback,
-                    data["sys_rational"],
-                    1,
-                )
-                closed_formula = self._transfer_function_to_latex(closed_tf)
-            except Exception:
-                closed_formula = rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
+        open_formula = self._open_loop_latex(data["sys_rational"], data["delay"])
+        closed_formula = self._closed_loop_latex(data["sys_rational"], data["delay"])
 
         ax.text(
             0.5,
-            0.70,
+            0.72,
             rf"$G_0(s) = {open_formula}$",
             ha="center",
             va="center",
-            fontsize=11,
+            fontsize=10,
         )
         ax.text(
             0.5,
@@ -1580,10 +1563,90 @@ class ControlExplorerApp(tk.Tk):
             rf"$G(s) = {closed_formula}$",
             ha="center",
             va="center",
-            fontsize=11,
+            fontsize=10,
         )
         self.fig_latex.tight_layout(pad=0.1)
         self.canvas_latex.draw_idle()
+
+    def _tf_num_den_arrays(self, sys_rational):
+        """
+        Liefert die Zaehler-/Nennerkoeffizienten eines SISO-TransferFunction-Systems.
+        Die Koeffizienten sind in absteigender Potenzreihenfolge.
+        """
+        sys_tf = ct.tf(sys_rational)
+        num = np.trim_zeros(np.asarray(sys_tf.num[0][0], dtype=float), trim="f")
+        den = np.trim_zeros(np.asarray(sys_tf.den[0][0], dtype=float), trim="f")
+
+        if num.size == 0:
+            num = np.array([0.0])
+        if den.size == 0:
+            den = np.array([1.0])
+
+        return num, den
+
+    def _open_loop_latex(self, sys_rational, delay):
+        """
+        Exakte Darstellung des eingegebenen offenen Kreises.
+
+        Bei aktiver Totzeit wird der rationale Anteil mit e^{-Ts} multipliziert.
+        """
+        rational_formula = self._transfer_function_to_latex(sys_rational)
+        if delay > 0:
+            return rational_formula + rf"\,e^{{-{delay:.4g}s}}"
+        return rational_formula
+
+    def _closed_loop_latex(self, sys_rational, delay):
+        """
+        Exakte Darstellung des geschlossenen Kreises bei Einheitsrueckfuehrung.
+
+        Ohne Totzeit ist G(s)=G0/(1+G0) wieder rational und wird mit
+        python-control exakt als TransferFunction berechnet.
+
+        Mit Totzeit ist der geschlossene Kreis im Allgemeinen nicht rational.
+        Dann wird er dennoch exakt algebraisch dargestellt:
+
+            G0(s) = N(s)/D(s) * e^{-Ts}
+            G(s)  = N(s)e^{-Ts} / (D(s) + N(s)e^{-Ts})
+
+        Fuer die Zeitbereichssimulation wird weiterhin separat die eingestellte
+        Pade-Approximation verwendet.
+        """
+        if delay <= 0:
+            try:
+                closed_tf = self._call_control(
+                    "feedback fuer Latex-Vorschau",
+                    ct.feedback,
+                    sys_rational,
+                    1,
+                )
+                return self._transfer_function_to_latex(closed_tf)
+            except Exception:
+                return rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
+
+        try:
+            num, den = self._tf_num_den_arrays(sys_rational)
+            num_latex = self._poly_to_latex(num)
+            den_latex = self._poly_to_latex(den)
+        except Exception:
+            return rf"\frac{{G_0(s)}}{{1+G_0(s)}}"
+
+        delay_latex = rf"e^{{-{delay:.4g}s}}"
+
+        if num_latex == "0":
+            return "0"
+
+        if num_latex == "1":
+            numerator = delay_latex
+            delayed_num = delay_latex
+        elif num_latex == "-1":
+            numerator = rf"-{delay_latex}"
+            delayed_num = rf"-{delay_latex}"
+        else:
+            numerator = rf"\left({num_latex}\right)\,{delay_latex}"
+            delayed_num = rf"\left({num_latex}\right)\,{delay_latex}"
+
+        denominator = rf"\left({den_latex}\right)+{delayed_num}"
+        return rf"\frac{{{numerator}}}{{{denominator}}}"
 
     def _transfer_function_to_latex(self, sys_rational):
         try:
@@ -1697,6 +1760,15 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append("")
         text_lines.append("Rationaler Anteil:")
         text_lines.append(str(data["sys_rational"]))
+        text_lines.append("")
+        text_lines.append("Exakte Übertragungsfunktionen:")
+        text_lines.append(f"  G_0(s) = {self._open_loop_latex(data['sys_rational'], data['delay'])}")
+        text_lines.append(f"  G(s)   = {self._closed_loop_latex(data['sys_rational'], data['delay'])}")
+        if data["delay"] > 0:
+            text_lines.append(
+                "  Hinweis: Wegen der Totzeit ist G(s) nicht rational; die Darstellung mit exp(-Ts) ist exakt. "
+                "Nur Zeitantwort und sisotool verwenden die Padé-Näherung."
+            )
         text_lines.append("")
 
         text_lines.append("Kritischer Punkt:")
