@@ -49,6 +49,7 @@ class ControlExplorerApp(tk.Tk):
         "n_points": "6000",
         "bode_x_min": "1e-1",
         "bode_x_max": "1e3",
+        "show_bode_margins": False,
         "t_max": "20",
         "t_points": "2000",
         "step_amplitude": "1",
@@ -192,6 +193,7 @@ class ControlExplorerApp(tk.Tk):
         self.n_points_var = tk.StringVar(value=defaults["n_points"])
         self.bode_x_min_var = tk.StringVar(value=defaults["bode_x_min"])
         self.bode_x_max_var = tk.StringVar(value=defaults["bode_x_max"])
+        self.show_bode_margins_var = tk.BooleanVar(value=defaults["show_bode_margins"])
 
         self.t_max_var = tk.StringVar(value=defaults["t_max"])
         self.t_points_var = tk.StringVar(value=defaults["t_points"])
@@ -218,6 +220,7 @@ class ControlExplorerApp(tk.Tk):
             "n_points": self.n_points_var,
             "bode_x_min": self.bode_x_min_var,
             "bode_x_max": self.bode_x_max_var,
+            "show_bode_margins": self.show_bode_margins_var,
             "t_max": self.t_max_var,
             "t_points": self.t_points_var,
             "step_amplitude": self.step_amplitude_var,
@@ -490,7 +493,7 @@ class ControlExplorerApp(tk.Tk):
         self.system_text.grid(row=4, column=0, sticky="nsew", pady=(2, 8))
         self.system_text.insert("1.0", "K_R / (s**3 + 3*s**2 + 3*s + 1)")
 
-        self.fig_latex = Figure(figsize=(4.6, 1.35), dpi=100)
+        self.fig_latex = Figure(figsize=(4.8, 1.95), dpi=100)
         self.ax_latex = self.fig_latex.add_subplot(111)
         self.ax_latex.axis("off")
         self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
@@ -578,6 +581,16 @@ class ControlExplorerApp(tk.Tk):
             self.bode_plot_system_var,
             "Standard: offener Kreis",
         )
+
+        bode_options_frame = ttk.Frame(self.tab_bode, padding=(0, 0, 0, 4))
+        bode_options_frame.pack(side=tk.TOP, fill=tk.X)
+        ttk.Checkbutton(
+            bode_options_frame,
+            text="Phasen- und Amplitudenreserve anzeigen",
+            variable=self.show_bode_margins_var,
+            command=self.schedule_update,
+        ).pack(side=tk.LEFT)
+
         self._create_tab_plot_system_selector(
             self.tab_step,
             self.step_plot_system_var,
@@ -806,13 +819,18 @@ class ControlExplorerApp(tk.Tk):
             xy=(0, 0),
             xytext=(12, 12),
             textcoords="offset points",
+            annotation_clip=False,
             bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.95},
             arrowprops={"arrowstyle": "->", "color": "#555555"},
             fontsize=9,
             zorder=20,
         )
         annotation.set_visible(False)
-        annotation.set_animated(True)
+        annotation.set_clip_on(False)
+        if annotation.get_bbox_patch() is not None:
+            annotation.get_bbox_patch().set_clip_on(False)
+        if annotation.arrow_patch is not None:
+            annotation.arrow_patch.set_clip_on(False)
         self._hover_annotations[ax] = annotation
         self._hover_data[ax] = {
             "kind": kind,
@@ -838,7 +856,41 @@ class ControlExplorerApp(tk.Tk):
             annotation = self._hover_annotations.get(ax)
             if annotation is not None and annotation.get_visible():
                 ax.draw_artist(annotation)
+                canvas.blit(ax.bbox)
             canvas.blit(ax.bbox)
+                # Robust, aber etwas langsamer
+                # canvas.draw_idle()
+            # else:
+            #     # Schnelles Entfernen, wenn möglich
+            #     background = self._hover_backgrounds.get(ax)
+            #     if background is not None:
+            #         canvas.restore_region(background)
+            #         canvas.blit(ax.bbox)
+            #     else:
+            #         canvas.draw_idle()
+
+    def _position_hover_annotation(self, ax, annotation, x_value, y_value):
+        """
+        Verschiebt die Hover-Box abhängig von der Mausposition so, dass sie
+        möglichst innerhalb der sichtbaren Achse bleibt.
+        """
+        try:
+            x_disp, y_disp = ax.transData.transform((x_value, y_value))
+            bbox = ax.bbox
+
+            x_frac = (x_disp - bbox.x0) / max(bbox.width, np.finfo(float).eps)
+            y_frac = (y_disp - bbox.y0) / max(bbox.height, np.finfo(float).eps)
+
+            dx = -14 if x_frac > 0.65 else 14
+            dy = -14 if y_frac > 0.65 else 14
+
+            annotation.set_position((dx, dy))
+            annotation.set_ha("right" if dx < 0 else "left")
+            annotation.set_va("top" if dy < 0 else "bottom")
+        except Exception:
+            annotation.set_position((12, 12))
+            annotation.set_ha("left")
+            annotation.set_va("bottom")
 
     def _on_plot_hover(self, event):
         self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
@@ -932,6 +984,7 @@ class ControlExplorerApp(tk.Tk):
 
         annotation = self._hover_annotations[ax]
         annotation.xy = (x[idx], y[idx])
+        self._position_hover_annotation(ax, annotation, x[idx], y[idx])
         annotation.set_text(text)
         self._draw_hover_axes(changed_axes)
 
@@ -1358,7 +1411,7 @@ class ControlExplorerApp(tk.Tk):
             if active_tab == 0:
                 self._plot_nyquist(omega_out, H_freq, data["markers"])
             elif active_tab == 1:
-                self._plot_bode(omega_out, H_freq)
+                self._plot_bode(omega_out, H_freq, L)
             elif active_tab == 2:
                 self._plot_step(sys_time, data["t"], data["step_amplitude"])
             else:
@@ -1505,7 +1558,187 @@ class ControlExplorerApp(tk.Tk):
                 color="black",
             )
 
-    def _plot_bode(self, omega, H):
+    def _interpolate_at_log_frequency(self, omega, values, omega_target):
+        log_w = np.log10(np.asarray(omega, dtype=float))
+        return float(np.interp(np.log10(float(omega_target)), log_w, np.asarray(values, dtype=float)))
+
+    def _find_level_crossings(self, omega, values, level):
+        """
+        Sucht Schnittfrequenzen y(ω)=level. Die Interpolation erfolgt in log10(ω),
+        weil Bode-Diagramme logarithmisch skaliert sind.
+        """
+        omega = np.asarray(omega, dtype=float)
+        values = np.asarray(values, dtype=float)
+
+        mask = np.isfinite(omega) & np.isfinite(values) & (omega > 0)
+        omega = omega[mask]
+        values = values[mask]
+
+        if omega.size < 2:
+            return []
+
+        log_w = np.log10(omega)
+        diff = values - level
+        crossings = []
+
+        for i in range(len(diff) - 1):
+            d0 = diff[i]
+            d1 = diff[i + 1]
+
+            if d0 == 0:
+                crossings.append(float(omega[i]))
+                continue
+
+            if d0 * d1 < 0:
+                frac = -d0 / (d1 - d0)
+                log_wc = log_w[i] + frac * (log_w[i + 1] - log_w[i])
+                crossings.append(float(10 ** log_wc))
+
+        if diff[-1] == 0:
+            crossings.append(float(omega[-1]))
+
+        # numerisch doppelte Schnittpunkte entfernen
+        unique = []
+        for value in crossings:
+            if not unique or not np.isclose(value, unique[-1], rtol=1e-5, atol=0):
+                unique.append(value)
+        return unique
+
+    def _compute_bode_margins_from_response(self, omega, L):
+        """
+        Berechnet Amplitudenreserve und Phasenreserve aus dem exakt ausgewerteten
+        offenen Kreis L(jω). Das funktioniert auch für reine Totzeiten, weil hier
+        direkt im Frequenzbereich gearbeitet wird.
+        """
+        mask = np.asarray(omega) > 0
+        w = np.asarray(omega, dtype=float)[mask]
+        L_w = np.asarray(L, dtype=complex)[mask]
+
+        mag = np.maximum(np.abs(L_w), np.finfo(float).tiny)
+        mag_db = 20.0 * np.log10(mag)
+        phase_deg = np.unwrap(np.angle(L_w)) * 180.0 / np.pi
+
+        gain_crossings = self._find_level_crossings(w, mag_db, 0.0)
+        phase_margin_candidates = []
+        for wc in gain_crossings:
+            phase_at_wc = self._interpolate_at_log_frequency(w, phase_deg, wc)
+            pm = 180.0 + phase_at_wc
+            phase_margin_candidates.append(
+                {
+                    "omega": wc,
+                    "phase_deg": phase_at_wc,
+                    "phase_margin_deg": pm,
+                }
+            )
+
+        phase_min = float(np.nanmin(phase_deg))
+        phase_max = float(np.nanmax(phase_deg))
+        k_min = int(np.floor((-phase_max - 180.0) / 360.0)) - 1
+        k_max = int(np.ceil((-phase_min - 180.0) / 360.0)) + 1
+
+        gain_margin_candidates = []
+        for k in range(k_min, k_max + 1):
+            target_phase = -180.0 - 360.0 * k
+            for wp in self._find_level_crossings(w, phase_deg, target_phase):
+                mag_db_at_wp = self._interpolate_at_log_frequency(w, mag_db, wp)
+                gm_db = -mag_db_at_wp
+                gm = 10.0 ** (gm_db / 20.0)
+                gain_margin_candidates.append(
+                    {
+                        "omega": wp,
+                        "target_phase_deg": target_phase,
+                        "mag_db": mag_db_at_wp,
+                        "gain_margin": gm,
+                        "gain_margin_db": gm_db,
+                    }
+                )
+
+        phase_margin = None
+        if phase_margin_candidates:
+            positive = [c for c in phase_margin_candidates if c["phase_margin_deg"] >= 0]
+            if positive:
+                phase_margin = min(positive, key=lambda c: c["phase_margin_deg"])
+            else:
+                phase_margin = max(phase_margin_candidates, key=lambda c: c["phase_margin_deg"])
+
+        gain_margin = None
+        if gain_margin_candidates:
+            stable_side = [c for c in gain_margin_candidates if c["gain_margin"] >= 1.0]
+            if stable_side:
+                gain_margin = min(stable_side, key=lambda c: c["gain_margin"])
+            else:
+                gain_margin = max(gain_margin_candidates, key=lambda c: c["gain_margin"])
+
+        return {
+            "gain_margin": gain_margin,
+            "phase_margin": phase_margin,
+        }
+
+    def _plot_bode_margins(self, ax_mag, ax_phase, omega, L_open):
+        margins = self._compute_bode_margins_from_response(omega, L_open)
+
+        ax_mag.axhline(0.0, linestyle=":", linewidth=1.0, color="black", label=r"$0\,\mathrm{dB}$")
+        ax_phase.axhline(-180.0, linestyle=":", linewidth=1.0, color="black", label=r"$-180^\circ$")
+
+        gm = margins["gain_margin"]
+        if gm is not None:
+            wp = gm["omega"]
+            mag_db_at_wp = gm["mag_db"]
+            ax_mag.axvline(wp, linestyle=":", linewidth=1.0, color="black")
+            ax_phase.axvline(wp, linestyle=":", linewidth=1.0, color="black")
+            ax_mag.plot(wp, mag_db_at_wp, "o", markersize=5)
+            ax_phase.plot(wp, gm["target_phase_deg"], "o", markersize=5)
+            ax_mag.vlines(wp, mag_db_at_wp, 0.0, linestyle=":", linewidth=1.2, color="black")
+            ax_mag.annotate(
+                rf"$A_R={gm['gain_margin']:.3g}$"
+                "\n"
+                rf"$={gm['gain_margin_db']:.2f}\,\mathrm{{dB}}$"
+                "\n"
+                rf"$\omega_\pi={wp:.3g}$",
+                xy=(wp, mag_db_at_wp),
+                xytext=(10, 10),
+                textcoords="offset points",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.9},
+                arrowprops={"arrowstyle": "->", "color": "#555555"},
+                annotation_clip=False,
+            )
+
+        pm = margins["phase_margin"]
+        if pm is not None:
+            wc = pm["omega"]
+            phase_at_wc = pm["phase_deg"]
+            ax_mag.axvline(wc, linestyle="--", linewidth=1.0, color="black")
+            ax_phase.axvline(wc, linestyle="--", linewidth=1.0, color="black")
+            ax_mag.plot(wc, 0.0, "s", markersize=5)
+            ax_phase.plot(wc, phase_at_wc, "s", markersize=5)
+            ax_phase.vlines(wc, -180.0, phase_at_wc, linestyle="--", linewidth=1.2, color="black")
+            ax_phase.annotate(
+                rf"$\varphi_R={pm['phase_margin_deg']:.2f}^\circ$"
+                "\n"
+                rf"$\omega_c={wc:.3g}$",
+                xy=(wc, phase_at_wc),
+                xytext=(10, 10),
+                textcoords="offset points",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.9},
+                arrowprops={"arrowstyle": "->", "color": "#555555"},
+                annotation_clip=False,
+            )
+
+        if gm is None and pm is None:
+            ax_mag.text(
+                0.02,
+                0.04,
+                "Keine Durchtrittsfrequenz im dargestellten Frequenzbereich gefunden.",
+                transform=ax_mag.transAxes,
+                fontsize=9,
+                va="bottom",
+                ha="left",
+                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+            )
+
+    def _plot_bode(self, omega, H, L_open=None):
         ax_mag = self.ax_mag
         ax_phase = self.ax_phase
 
@@ -1522,18 +1755,39 @@ class ControlExplorerApp(tk.Tk):
         mag_db = 20.0 * np.log10(np.maximum(np.abs(H_w), np.finfo(float).tiny))
         phase_deg = np.unwrap(np.angle(H_w)) * 180.0 / np.pi
 
-        ax_mag.semilogx(w, mag_db, linewidth=2)
+        ax_mag.semilogx(w, mag_db, linewidth=2, label=self.bode_plot_system_var.get())
         ax_mag.set_ylabel(r"$|H(j\omega)|$ [dB]")
         ax_mag.set_title(f"Frequenzgang / Bode - {self.bode_plot_system_var.get()}")
         ax_mag.grid(self.grid_var.get(), which="both")
 
-        ax_phase.semilogx(w, phase_deg, linewidth=2)
+        ax_phase.semilogx(w, phase_deg, linewidth=2, label=self.bode_plot_system_var.get())
         ax_phase.set_xlabel(r"$\omega$ [rad/s]")
         ax_phase.set_ylabel(r"$\arg H(j\omega)$ [deg]")
         ax_phase.grid(self.grid_var.get(), which="both")
 
         ax_mag.set_xlim(left=float(w[0]), right=float(w[-1]))
         ax_phase.set_xlim(left=float(w[0]), right=float(w[-1]))
+
+        if self.show_bode_margins_var.get():
+            if self.bode_plot_system_var.get() == self.SYSTEM_OPEN and L_open is not None:
+                self._plot_bode_margins(ax_mag, ax_phase, omega, L_open)
+            else:
+                ax_mag.text(
+                    0.02,
+                    0.04,
+                    "Reserven werden für den offenen Kreis L(jω) bestimmt.\n"
+                    "Bitte im Bode-Tab den offenen Kreis auswählen.",
+                    transform=ax_mag.transAxes,
+                    fontsize=9,
+                    va="bottom",
+                    ha="left",
+                    bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+                )
+
+        if ax_mag.get_legend_handles_labels()[0]:
+            ax_mag.legend(loc="best", fontsize=8)
+        if ax_phase.get_legend_handles_labels()[0]:
+            ax_phase.legend(loc="best", fontsize=8)
 
         self._register_hover(ax_mag, "bode_mag", w, mag_db, phase=phase_deg)
         self._register_hover(ax_phase, "bode_phase", w, phase_deg, magnitude=mag_db)
@@ -1550,20 +1804,20 @@ class ControlExplorerApp(tk.Tk):
         closed_formula = self._closed_loop_latex(data["sys_rational"], data["delay"])
 
         ax.text(
-            0.5,
+            0.0,
             0.72,
             rf"$G_0(s) = {open_formula}$",
-            ha="center",
+            ha="left",
             va="center",
-            fontsize=10,
+            fontsize=14,
         )
         ax.text(
-            0.5,
+            0.0,
             0.28,
             rf"$G(s) = {closed_formula}$",
-            ha="center",
+            ha="left",
             va="center",
-            fontsize=10,
+            fontsize=14,
         )
         self.fig_latex.tight_layout(pad=0.1)
         self.canvas_latex.draw_idle()
