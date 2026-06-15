@@ -109,10 +109,7 @@ class ControlExplorerApp(tk.Tk):
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
-        if getattr(sys, "frozen", False):
-            self.examples_dir = Path.home() / "Documents" / "Control Explorer Examples"
-        else:
-            self.examples_dir = Path(__file__).resolve().parent / "examples"
+        self.examples_dir = self._documents_directory() / "Control Explorer Examples"
 
         self._create_variables()
         self._load_settings()
@@ -791,6 +788,24 @@ class ControlExplorerApp(tk.Tk):
     def _on_root_locus_closed_poles_changed(self):
         self._update_root_locus_marker_controls()
         self.schedule_update()
+
+    @staticmethod
+    def _documents_directory():
+        if os.name == "nt":
+            try:
+                path_buffer = ctypes.create_unicode_buffer(32768)
+                result = ctypes.windll.shell32.SHGetFolderPathW(
+                    None,
+                    5,  # CSIDL_PERSONAL / Documents
+                    None,
+                    0,
+                    path_buffer,
+                )
+                if result == 0 and path_buffer.value:
+                    return Path(path_buffer.value)
+            except (AttributeError, OSError):
+                pass
+        return Path.home() / "Documents"
 
     def _embed_figure(self, parent, fig):
         canvas = FigureCanvasTkAgg(fig, master=parent)
@@ -1519,7 +1534,26 @@ class ControlExplorerApp(tk.Tk):
         return sorted(set(ratios))
 
     def _frequency_response_exact_delay(self, sys_rational, omega, delay):
-        mag, phase, omega_out = self._call_control("frequency_response", ct.frequency_response, sys_rational, omega)
+        omega = np.asarray(omega, dtype=float)
+        evaluation_omega = omega
+
+        # Bei einem Pol im Ursprung ist G(j*0) unendlich. Diesen einzelnen
+        # Grenzpunkt nicht numerisch auswerten; die Ortskurve beginnt dann beim
+        # kleinsten von null verschiedenen Frequenzpunkt.
+        if self._count_origin_integrators(sys_rational) > 0:
+            evaluation_omega = omega[omega != 0.0]
+            if evaluation_omega.size == 0:
+                raise ValueError(
+                    "Der Frequenzbereich enthaelt fuer ein System mit Pol im Ursprung "
+                    "keinen von null verschiedenen Frequenzpunkt."
+                )
+
+        mag, phase, omega_out = self._call_control(
+            "frequency_response",
+            ct.frequency_response,
+            sys_rational,
+            evaluation_omega,
+        )
         response = np.squeeze(mag) * np.exp(1j * np.squeeze(phase))
 
         if response.ndim != 1:
@@ -1725,6 +1759,20 @@ class ControlExplorerApp(tk.Tk):
             messagebox.showinfo("SISO Tool", "Diese python-control-Version stellt ct.sisotool nicht bereit.")
             return
 
+        proceed = messagebox.askokcancel(
+            "Externes Vergleichswerkzeug",
+            "Das SISO Tool ist ein separates Werkzeug aus python-control und nicht Teil "
+            "des Control Explorers. Es dient hier nur zum interaktiven Vergleich.\n\n"
+            "Aenderungen am Verstaerkungsfaktor im SISO Tool werden nicht in den "
+            "Control Explorer zurueckuebernommen. Eine vorhandene Totzeit wird dort "
+            "nur ueber die eingestellte Pade-Approximation beruecksichtigt.\n\n"
+            "SISO Tool jetzt oeffnen?",
+            icon=messagebox.WARNING,
+            parent=self,
+        )
+        if not proceed:
+            return
+
         self._control_warnings = []
         try:
             data = self._parse_user_input()
@@ -1740,11 +1788,20 @@ class ControlExplorerApp(tk.Tk):
                     delay_tf = self._call_control("tf fuer sisotool-Totzeit", ct.tf, num_delay, den_delay)
                     sys_for_tool = sys_for_tool * delay_tf
 
+            initial_gain = data["root_locus_marker_gain"]
+            if initial_gain is None:
+                initial_gain = 1.0
+
             self._sisotool_result = self._call_control(
                 "sisotool",
                 ct.sisotool,
                 sys_for_tool,
+                initial_gain=initial_gain,
+                dB=True,
+                Hz=self.bode_frequency_unit_var.get() == self.BODE_UNIT_HZ,
+                deg=True,
                 omega_limits=[data["bode_x_min"], data["bode_x_max"]],
+                margins_bode=True,
                 tvect=data["t"],
             )
             plt.show(block=False)
@@ -3083,16 +3140,27 @@ class ControlExplorerApp(tk.Tk):
             "settings": self._settings_snapshot(),
         }
 
-    def save_example(self):
+    def _prepare_examples_directory(self):
         try:
             self.examples_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            messagebox.showerror(
+                "Beispielordner",
+                "Der Ordner 'Control Explorer Examples' konnte nicht erstellt oder geoeffnet werden:\n\n"
+                f"{self.examples_dir}\n\n{exc}",
+                parent=self,
+            )
+            return False
+        return True
+
+    def save_example(self):
+        if not self._prepare_examples_directory():
+            return
 
         filename = filedialog.asksaveasfilename(
             parent=self,
             title="Beispiel speichern",
-            initialdir=str(self.examples_dir if self.examples_dir.exists() else Path(__file__).resolve().parent),
+            initialdir=str(self.examples_dir),
             defaultextension=".json",
             filetypes=[("Control-Explorer-Beispiel", "*.json"), ("Alle Dateien", "*.*")],
         )
@@ -3107,10 +3175,13 @@ class ControlExplorerApp(tk.Tk):
             messagebox.showerror("Beispiel speichern", f"Das Beispiel konnte nicht gespeichert werden:\n\n{exc}")
 
     def load_example(self):
+        if not self._prepare_examples_directory():
+            return
+
         filename = filedialog.askopenfilename(
             parent=self,
             title="Beispiel laden",
-            initialdir=str(self.examples_dir if self.examples_dir.exists() else Path(__file__).resolve().parent),
+            initialdir=str(self.examples_dir),
             filetypes=[("Control-Explorer-Beispiel", "*.json"), ("Alle Dateien", "*.*")],
         )
         if not filename:
