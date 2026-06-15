@@ -1,6 +1,8 @@
 # Control Explorer
 
-Desktop-GUI zur Untersuchung von SISO-Uebertragungsfunktionen mit Nyquist-Ortskurve, Bode-Diagramm, Sprungantwort und `python-control` SISO Tool.
+Desktop-GUI zur Untersuchung von SISO-Uebertragungsfunktionen mit Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und `python-control` SISO Tool.
+
+Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K G_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich. Offene Pole und Nullstellen, ein markierbarer Entwurfswert, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert.
 
 ## Direkt aus Python starten
 
@@ -55,7 +57,7 @@ Diese Dateien liegen ausserhalb des Programmordners und bleiben bei einem Progra
 Vor einer Veroeffentlichung:
 
 1. `dist\ControlExplorer\ControlExplorer.exe` auf einem Windows-Rechner ohne Python testen.
-2. Nyquist, Bode, Sprungantwort, Hover, SISO Tool sowie Beispiel-Speichern/Laden pruefen.
+2. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Hover, SISO Tool sowie Beispiel-Speichern/Laden pruefen.
 3. Den vollstaendigen Ordner als ZIP-Datei veroeffentlichen, beispielsweise ueber GitHub Releases.
 4. Fuer eine professionelle oeffentliche Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
 

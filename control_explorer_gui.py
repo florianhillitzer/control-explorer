@@ -55,6 +55,15 @@ class ControlExplorerApp(tk.Tk):
         "bode_x_max": "1e3",
         "bode_frequency_unit": BODE_UNIT_OMEGA,
         "show_bode_margins": False,
+        "root_locus_gain_min": "0",
+        "root_locus_gain_max": "1e3",
+        "root_locus_points": "800",
+        "root_locus_marker_gain": "1",
+        "root_locus_log_gain": True,
+        "root_locus_include_delay": False,
+        "root_locus_equal_axis": False,
+        "root_locus_show_damping": True,
+        "root_locus_damping_ratios": "0.2, 0.4, 0.6, 0.8",
         "t_max": "20",
         "t_points": "2000",
         "step_amplitude": "1",
@@ -227,6 +236,16 @@ class ControlExplorerApp(tk.Tk):
         self.bode_frequency_unit_var = tk.StringVar(value=defaults["bode_frequency_unit"])
         self.show_bode_margins_var = tk.BooleanVar(value=defaults["show_bode_margins"])
 
+        self.root_locus_gain_min_var = tk.StringVar(value=defaults["root_locus_gain_min"])
+        self.root_locus_gain_max_var = tk.StringVar(value=defaults["root_locus_gain_max"])
+        self.root_locus_points_var = tk.StringVar(value=defaults["root_locus_points"])
+        self.root_locus_marker_gain_var = tk.StringVar(value=defaults["root_locus_marker_gain"])
+        self.root_locus_log_gain_var = tk.BooleanVar(value=defaults["root_locus_log_gain"])
+        self.root_locus_include_delay_var = tk.BooleanVar(value=defaults["root_locus_include_delay"])
+        self.root_locus_equal_axis_var = tk.BooleanVar(value=defaults["root_locus_equal_axis"])
+        self.root_locus_show_damping_var = tk.BooleanVar(value=defaults["root_locus_show_damping"])
+        self.root_locus_damping_ratios_var = tk.StringVar(value=defaults["root_locus_damping_ratios"])
+
         self.t_max_var = tk.StringVar(value=defaults["t_max"])
         self.t_points_var = tk.StringVar(value=defaults["t_points"])
         self.step_amplitude_var = tk.StringVar(value=defaults["step_amplitude"])
@@ -254,6 +273,15 @@ class ControlExplorerApp(tk.Tk):
             "bode_x_max": self.bode_x_max_var,
             "bode_frequency_unit": self.bode_frequency_unit_var,
             "show_bode_margins": self.show_bode_margins_var,
+            "root_locus_gain_min": self.root_locus_gain_min_var,
+            "root_locus_gain_max": self.root_locus_gain_max_var,
+            "root_locus_points": self.root_locus_points_var,
+            "root_locus_marker_gain": self.root_locus_marker_gain_var,
+            "root_locus_log_gain": self.root_locus_log_gain_var,
+            "root_locus_include_delay": self.root_locus_include_delay_var,
+            "root_locus_equal_axis": self.root_locus_equal_axis_var,
+            "root_locus_show_damping": self.root_locus_show_damping_var,
+            "root_locus_damping_ratios": self.root_locus_damping_ratios_var,
             "t_max": self.t_max_var,
             "t_points": self.t_points_var,
             "step_amplitude": self.step_amplitude_var,
@@ -358,8 +386,8 @@ class ControlExplorerApp(tk.Tk):
         self._settings_window = dialog
         dialog.title("Einstellungen")
         dialog.transient(self)
-        dialog.geometry("540x470")
-        dialog.minsize(500, 420)
+        dialog.geometry("560x540")
+        dialog.minsize(520, 460)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
         dialog.protocol("WM_DELETE_WINDOW", lambda: self._close_settings_window(dialog))
@@ -369,19 +397,22 @@ class ControlExplorerApp(tk.Tk):
 
         tab_general = ttk.Frame(notebook, padding=10)
         tab_freq = ttk.Frame(notebook, padding=10)
+        tab_root_locus = ttk.Frame(notebook, padding=10)
         tab_step = ttk.Frame(notebook, padding=10)
         tab_nyquist = ttk.Frame(notebook, padding=10)
 
         notebook.add(tab_general, text="Allgemein")
         notebook.add(tab_freq, text="Frequenz")
+        notebook.add(tab_root_locus, text="Wurzelortskurve")
         notebook.add(tab_step, text="Sprung")
         notebook.add(tab_nyquist, text="Ortskurve")
 
-        for tab in (tab_general, tab_freq, tab_step, tab_nyquist):
+        for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_nyquist):
             tab.columnconfigure(0, weight=1)
 
         self._create_general_settings(tab_general)
         self._create_frequency_settings(tab_freq)
+        self._create_root_locus_settings(tab_root_locus)
         self._create_step_settings(tab_step)
         self._create_nyquist_settings(tab_nyquist)
 
@@ -468,6 +499,60 @@ class ControlExplorerApp(tk.Tk):
             justify="left",
             foreground="#555555",
         ).grid(row=4, column=0, sticky="w", padx=6, pady=(10, 0))
+
+    def _create_root_locus_settings(self, parent):
+        gain_box = ttk.LabelFrame(parent, text="Zusatzverstaerkung K")
+        gain_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        gain_box.columnconfigure(0, weight=1)
+        self._add_entry(gain_box, "K min", self.root_locus_gain_min_var, 0, 0)
+        self._add_entry(gain_box, "K max", self.root_locus_gain_max_var, 1, 0)
+        self._add_entry(gain_box, "Punkte", self.root_locus_points_var, 2, 0)
+        self._add_entry(gain_box, "Markierter Wert K", self.root_locus_marker_gain_var, 3, 0)
+        ttk.Checkbutton(
+            gain_box,
+            text="K logarithmisch abtasten",
+            variable=self.root_locus_log_gain_var,
+            command=self.schedule_update,
+        ).grid(row=4, column=0, sticky="w", padx=6, pady=3)
+
+        display_box = ttk.LabelFrame(parent, text="Darstellung")
+        display_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        display_box.columnconfigure(0, weight=1)
+        ttk.Checkbutton(
+            display_box,
+            text="Totzeit mit Pade-Approximation beruecksichtigen",
+            variable=self.root_locus_include_delay_var,
+            command=self.schedule_update,
+        ).grid(row=0, column=0, sticky="w", padx=6, pady=3)
+        ttk.Checkbutton(
+            display_box,
+            text="gleiche Skalierung fuer Real- und Imaginaerachse",
+            variable=self.root_locus_equal_axis_var,
+            command=self.schedule_update,
+        ).grid(row=1, column=0, sticky="w", padx=6, pady=3)
+        ttk.Checkbutton(
+            display_box,
+            text="Linien konstanten Daempfungsgrades anzeigen",
+            variable=self.root_locus_show_damping_var,
+            command=self.schedule_update,
+        ).grid(row=2, column=0, sticky="w", padx=6, pady=3)
+        self._add_entry(
+            display_box,
+            "Daempfungsgrade zeta",
+            self.root_locus_damping_ratios_var,
+            3,
+            0,
+        )
+        ttk.Label(
+            parent,
+            text=(
+                "Gezeichnet werden die Pole von 1 + K G_0(s) = 0. "
+                "Bei Totzeit entstehen durch Pade zusaetzliche approximierte Pole und Nullstellen."
+            ),
+            wraplength=460,
+            justify="left",
+            foreground="#555555",
+        ).grid(row=2, column=0, sticky="w", padx=6)
 
     def _create_nyquist_settings(self, parent):
         ttk.Checkbutton(parent, text="axis equal", variable=self.equal_axis_var, command=self.schedule_update).grid(row=0, column=0, sticky="w", pady=3)
@@ -568,7 +653,7 @@ class ControlExplorerApp(tk.Tk):
             "- s ist als ct.TransferFunction.s definiert.\n"
             "- Parameter koennen im oberen Feld definiert werden.\n"
             "- Frequenzplots nutzen die Totzeit exakt.\n"
-            "- Sprungantworten nutzen Pade fuer die Totzeit.\n"
+            "- Sprungantwort und Wurzelortskurve koennen Pade fuer die Totzeit nutzen.\n"
             "- Frequenzbereich, Sprungantwort und Optionen liegen im Einstellungsfenster."
         )
         ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=9, column=0, sticky="w", pady=(4, 0))
@@ -610,11 +695,13 @@ class ControlExplorerApp(tk.Tk):
 
         self.tab_nyquist = ttk.Frame(self.notebook)
         self.tab_bode = ttk.Frame(self.notebook)
+        self.tab_root_locus = ttk.Frame(self.notebook)
         self.tab_step = ttk.Frame(self.notebook)
         self.tab_info = ttk.Frame(self.notebook)
 
         self.notebook.add(self.tab_nyquist, text="Nyquist / Ortskurve")
         self.notebook.add(self.tab_bode, text="Frequenzgang / Bode")
+        self.notebook.add(self.tab_root_locus, text="Wurzelortskurve")
         self.notebook.add(self.tab_step, text="Sprungantwort")
         self.notebook.add(self.tab_info, text="Info")
 
@@ -638,6 +725,20 @@ class ControlExplorerApp(tk.Tk):
             command=self.schedule_update,
         ).pack(side=tk.LEFT)
 
+        root_locus_options = ttk.Frame(self.tab_root_locus, padding=(0, 0, 0, 4))
+        root_locus_options.pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(root_locus_options, text="Markierter Entwurfswert K:").pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Entry(
+            root_locus_options,
+            textvariable=self.root_locus_marker_gain_var,
+            width=12,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            root_locus_options,
+            text="Basis: offener Kreis; Totzeit optional ueber Pade",
+            foreground="#555555",
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
         self._create_tab_plot_system_selector(
             self.tab_step,
             self.step_plot_system_var,
@@ -653,11 +754,15 @@ class ControlExplorerApp(tk.Tk):
         self.ax_phase = self.fig_bode.add_subplot(212)
         self.canvas_bode = self._embed_figure(self.tab_bode, self.fig_bode)
 
+        self.fig_root_locus = Figure(figsize=(7, 6), dpi=100)
+        self.ax_root_locus = self.fig_root_locus.add_subplot(111)
+        self.canvas_root_locus = self._embed_figure(self.tab_root_locus, self.fig_root_locus)
+
         self.fig_step = Figure(figsize=(7, 6), dpi=100)
         self.ax_step = self.fig_step.add_subplot(111)
         self.canvas_step = self._embed_figure(self.tab_step, self.fig_step)
 
-        for canvas in (self.canvas_nyquist, self.canvas_bode, self.canvas_step):
+        for canvas in (self.canvas_nyquist, self.canvas_bode, self.canvas_root_locus, self.canvas_step):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
             canvas.mpl_connect("draw_event", self._cache_hover_backgrounds)
 
@@ -1103,6 +1208,25 @@ class ControlExplorerApp(tk.Tk):
                 + phase_text + "\n"
                 + response_text
             )
+        elif kind == "root_locus":
+            pole = complex(x[idx], y[idx])
+            natural_frequency = abs(pole)
+            damping_ratio = (
+                -pole.real / natural_frequency
+                if natural_frequency > np.finfo(float).eps
+                else np.nan
+            )
+            damping_text = (
+                rf"$\zeta = {damping_ratio:.5g}$"
+                if np.isfinite(damping_ratio)
+                else r"$\zeta$ nicht definiert"
+            )
+            text = (
+                rf"$K = {data['gain'][idx]:.5g}$" "\n"
+                rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
+                rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
+                + damping_text
+            )
         else:
             text = (
                 rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
@@ -1222,6 +1346,11 @@ class ControlExplorerApp(tk.Tk):
         bode_frequency_min = float(eval(self.bode_x_min_var.get(), env, env))
         bode_frequency_max = float(eval(self.bode_x_max_var.get(), env, env))
 
+        root_locus_gain_min = float(eval(self.root_locus_gain_min_var.get(), env, env))
+        root_locus_gain_max = float(eval(self.root_locus_gain_max_var.get(), env, env))
+        root_locus_points = int(float(eval(self.root_locus_points_var.get(), env, env)))
+        root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
+
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
         step_amplitude = float(eval(self.step_amplitude_var.get(), env, env))
@@ -1236,6 +1365,18 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Unbekannte Bode-Frequenzeinheit.")
         if bode_frequency_min <= 0 or bode_frequency_max <= bode_frequency_min:
             raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
+        if not np.all(np.isfinite([
+            root_locus_gain_min,
+            root_locus_gain_max,
+            root_locus_marker_gain,
+        ])):
+            raise ValueError("Die Verstaerkungswerte der Wurzelortskurve muessen endlich sein.")
+        if root_locus_gain_min < 0 or root_locus_gain_max <= root_locus_gain_min:
+            raise ValueError("Fuer die Wurzelortskurve muss 0 <= K min < K max gelten.")
+        if root_locus_points < 10:
+            raise ValueError("Die Wurzelortskurve benoetigt mindestens 10 Verstaerkungspunkte.")
+        if not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max:
+            raise ValueError("Der markierte Wert K muss zwischen K min und K max liegen.")
         if t_max <= 0:
             raise ValueError("t_max muss > 0 sein.")
         if t_points < 10:
@@ -1249,6 +1390,26 @@ class ControlExplorerApp(tk.Tk):
         bode_omega_min = self._bode_frequency_to_omega(bode_frequency_min)
         bode_omega_max = self._bode_frequency_to_omega(bode_frequency_max)
         bode_omega = np.logspace(np.log10(bode_omega_min), np.log10(bode_omega_max), n_points)
+        if self.root_locus_log_gain_var.get():
+            if root_locus_gain_min == 0:
+                positive_min = max(root_locus_gain_max * 1e-9, np.finfo(float).tiny)
+                root_locus_gains = np.concatenate((
+                    [0.0],
+                    np.geomspace(positive_min, root_locus_gain_max, root_locus_points - 1),
+                ))
+            else:
+                root_locus_gains = np.geomspace(
+                    root_locus_gain_min,
+                    root_locus_gain_max,
+                    root_locus_points,
+                )
+        else:
+            root_locus_gains = np.linspace(
+                root_locus_gain_min,
+                root_locus_gain_max,
+                root_locus_points,
+            )
+        root_locus_gains = np.unique(np.append(root_locus_gains, root_locus_marker_gain))
         t = np.linspace(0.0, t_max, t_points)
 
         markers = self._parse_marker_frequencies(env)
@@ -1263,6 +1424,8 @@ class ControlExplorerApp(tk.Tk):
             "bode_omega": bode_omega,
             "bode_x_min": bode_omega_min,
             "bode_x_max": bode_omega_max,
+            "root_locus_gains": root_locus_gains,
+            "root_locus_marker_gain": root_locus_marker_gain,
             "t": t,
             "step_amplitude": step_amplitude,
             "pade_order": pade_order,
@@ -1310,6 +1473,19 @@ class ControlExplorerApp(tk.Tk):
             if value >= 0.0:
                 positions.append(value)
         return positions
+
+    def _parse_root_locus_damping_ratios(self):
+        env = self._base_eval_environment()
+        ratios = []
+        for part in self.root_locus_damping_ratios_var.get().split(","):
+            part = part.strip()
+            if not part:
+                continue
+            value = float(eval(part, env, env))
+            if not 0.0 < value < 1.0:
+                raise ValueError("Daempfungsgrade fuer die Wurzelortskurve muessen zwischen 0 und 1 liegen.")
+            ratios.append(value)
+        return sorted(set(ratios))
 
     def _frequency_response_exact_delay(self, sys_rational, omega, delay):
         mag, phase, omega_out = self._call_control("frequency_response", ct.frequency_response, sys_rational, omega)
@@ -1490,6 +1666,29 @@ class ControlExplorerApp(tk.Tk):
             return self._call_control("feedback fuer S(s)", ct.feedback, one, L_time)
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
+    def _root_locus_system(self, sys_rational, delay, pade_order):
+        if not self.root_locus_include_delay_var.get() or delay <= 0:
+            return sys_rational
+        if pade_order <= 0:
+            self._control_warnings.append(
+                "Wurzelortskurve: Totzeit wurde nicht beruecksichtigt, weil die Pade-Ordnung 0 ist."
+            )
+            return sys_rational
+
+        num_delay, den_delay = self._call_control(
+            "pade fuer Wurzelortskurve",
+            ct.pade,
+            delay,
+            pade_order,
+        )
+        delay_tf = self._call_control(
+            "tf fuer Wurzelortskurven-Totzeit",
+            ct.tf,
+            num_delay,
+            den_delay,
+        )
+        return sys_rational * delay_tf
+
     def open_sisotool(self):
         if not hasattr(ct, "sisotool"):
             messagebox.showinfo("SISO Tool", "Diese python-control-Version stellt ct.sisotool nicht bereit.")
@@ -1584,7 +1783,7 @@ class ControlExplorerApp(tk.Tk):
                     data["sys_rational"], data["bode_omega"], data["delay"]
                 )
                 H_freq = self._selected_frequency_system(L, self.bode_plot_system_var.get())
-            elif active_tab == 3:
+            elif active_tab == 4:
                 omega_out, L = self._frequency_response_exact_delay(
                     data["sys_rational"], data["omega"], data["delay"]
                 )
@@ -1592,7 +1791,7 @@ class ControlExplorerApp(tk.Tk):
             else:
                 omega_out = L = H_freq = None
 
-            if active_tab in (2, 3):
+            if active_tab in (3, 4):
                 sys_time = self._time_domain_system_with_pade(
                     data["sys_rational"],
                     data["delay"],
@@ -1602,11 +1801,26 @@ class ControlExplorerApp(tk.Tk):
             else:
                 sys_time = None
 
+            if active_tab == 2:
+                sys_root_locus = self._root_locus_system(
+                    data["sys_rational"],
+                    data["delay"],
+                    data["pade_order"],
+                )
+            else:
+                sys_root_locus = None
+
             if active_tab == 0:
                 self._plot_nyquist(omega_out, H_freq, data["markers"])
             elif active_tab == 1:
                 self._plot_bode(omega_out, H_freq, L, data["sys_rational"])
             elif active_tab == 2:
+                self._plot_root_locus(
+                    sys_root_locus,
+                    data["root_locus_gains"],
+                    data["root_locus_marker_gain"],
+                )
+            elif active_tab == 3:
                 self._plot_step(sys_time, data["t"], data["step_amplitude"])
             else:
                 self._update_info(data, omega_out, L, H_freq, sys_time)
@@ -2163,6 +2377,230 @@ class ControlExplorerApp(tk.Tk):
         self.fig_bode.tight_layout()
         self.canvas_bode.draw_idle()
 
+    @staticmethod
+    def _sampled_stable_gain_text(gains, loci, tol=1e-9):
+        gains = np.asarray(gains, dtype=float)
+        loci = np.asarray(loci, dtype=complex)
+        stable = np.all(np.isfinite(loci), axis=1) & np.all(loci.real < -tol, axis=1)
+
+        ranges = []
+        start = None
+        for index, is_stable in enumerate(stable):
+            if is_stable and start is None:
+                start = index
+            if start is not None and (not is_stable or index == len(stable) - 1):
+                end = index if is_stable and index == len(stable) - 1 else index - 1
+                ranges.append((gains[start], gains[end]))
+                start = None
+
+        if not ranges:
+            return "Im abgetasteten K-Bereich wurde kein asymptotisch stabiler Abschnitt gefunden."
+
+        parts = []
+        for lower, upper in ranges:
+            if np.isclose(lower, upper):
+                parts.append(f"K ca. {lower:.4g}")
+            else:
+                parts.append(f"K ca. {lower:.4g} bis {upper:.4g}")
+        return "Abgetastet stabil: " + "; ".join(parts)
+
+    def _draw_root_locus_damping_grid(self, ax):
+        if not self.root_locus_show_damping_var.get():
+            return
+
+        ratios = self._parse_root_locus_damping_ratios()
+        if not ratios:
+            return
+
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        radius = max(abs(xlim[0]), abs(xlim[1]), abs(ylim[0]), abs(ylim[1]), 1.0)
+        x_values = np.linspace(-1.5 * radius, 0.0, 200)
+
+        for ratio in ratios:
+            slope = np.sqrt(1.0 - ratio**2) / ratio
+            y_values = -x_values * slope
+            ax.plot(x_values, y_values, ":", color="#999999", linewidth=0.8, zorder=0)
+            ax.plot(x_values, -y_values, ":", color="#999999", linewidth=0.8, zorder=0)
+
+            label_x = -0.55 * radius
+            label_y = -label_x * slope
+            if ylim[0] <= label_y <= ylim[1]:
+                ax.text(
+                    label_x,
+                    label_y,
+                    rf"$\zeta={ratio:g}$",
+                    color="#777777",
+                    fontsize=7.5,
+                    ha="right",
+                    va="bottom",
+                    clip_on=True,
+                )
+
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+
+    @staticmethod
+    def _set_root_locus_limits(ax, loci, open_poles, open_zeros):
+        values = [np.asarray(loci, dtype=complex).reshape(-1)]
+        if open_poles.size:
+            values.append(np.asarray(open_poles, dtype=complex).reshape(-1))
+        if open_zeros.size:
+            values.append(np.asarray(open_zeros, dtype=complex).reshape(-1))
+
+        points = np.concatenate(values)
+        finite = np.isfinite(points.real) & np.isfinite(points.imag)
+        points = points[finite]
+        if not points.size:
+            raise ValueError("Die Wurzelortskurve enthaelt keine endlichen Punkte.")
+
+        x_min = min(float(np.min(points.real)), 0.0)
+        x_max = max(float(np.max(points.real)), 0.0)
+        y_min = min(float(np.min(points.imag)), 0.0)
+        y_max = max(float(np.max(points.imag)), 0.0)
+
+        x_span = x_max - x_min
+        y_span = y_max - y_min
+        reference_span = max(x_span, y_span, 1.0)
+        x_padding = 0.08 * max(x_span, 0.1 * reference_span)
+        y_padding = 0.08 * max(y_span, 0.1 * reference_span)
+
+        ax.set_xlim(x_min - x_padding, x_max + x_padding)
+        ax.set_ylim(y_min - y_padding, y_max + y_padding)
+        return x_span, y_span
+
+    def _plot_root_locus(self, sys_root_locus, gains, marker_gain):
+        ax = self.ax_root_locus
+        ax.clear()
+        self._hover_data.pop(ax, None)
+        self._hover_annotations.pop(ax, None)
+
+        response = self._call_control(
+            "root_locus_map",
+            ct.root_locus_map,
+            sys_root_locus,
+            gains=np.asarray(gains, dtype=float),
+        )
+        loci = np.asarray(response.loci, dtype=complex)
+        locus_gains = np.asarray(response.gains, dtype=float)
+        if loci.ndim != 2 or loci.shape[0] != locus_gains.size:
+            raise ValueError("Die Wurzelortskurve konnte nicht als zweidimensionales Polraster berechnet werden.")
+        if loci.shape[1] == 0:
+            raise ValueError("Fuer eine Wurzelortskurve muss der offene Kreis mindestens einen Pol besitzen.")
+
+        for branch in range(loci.shape[1]):
+            branch_values = loci[:, branch]
+            finite = np.isfinite(branch_values.real) & np.isfinite(branch_values.imag)
+            if np.any(finite):
+                ax.plot(
+                    branch_values.real[finite],
+                    branch_values.imag[finite],
+                    color="#1f77b4",
+                    linewidth=1.6,
+                    label="Wurzelortskurve" if branch == 0 else None,
+                )
+
+        open_poles = np.asarray(response.poles, dtype=complex).reshape(-1)
+        open_zeros = np.asarray(response.zeros, dtype=complex).reshape(-1)
+        if open_poles.size:
+            ax.plot(
+                open_poles.real,
+                open_poles.imag,
+                linestyle="none",
+                marker="x",
+                color="#d62728",
+                markersize=9,
+                markeredgewidth=2,
+                label="Offene Pole",
+            )
+        if open_zeros.size:
+            ax.plot(
+                open_zeros.real,
+                open_zeros.imag,
+                linestyle="none",
+                marker="o",
+                markerfacecolor="none",
+                markeredgecolor="#2ca02c",
+                markersize=8,
+                markeredgewidth=1.8,
+                label="Offene Nullstellen",
+            )
+
+        marker_index = int(np.argmin(np.abs(locus_gains - marker_gain)))
+        marker_poles = loci[marker_index]
+        finite_marker = np.isfinite(marker_poles.real) & np.isfinite(marker_poles.imag)
+        marker_poles = marker_poles[finite_marker]
+        if marker_poles.size:
+            ax.plot(
+                marker_poles.real,
+                marker_poles.imag,
+                linestyle="none",
+                marker="D",
+                color="#ff7f0e",
+                markersize=6,
+                label=rf"Geschlossene Pole bei $K={marker_gain:.4g}$",
+            )
+
+        ax.axvline(0.0, color="black", linewidth=1.0, linestyle="--", label="Stabilitaetsgrenze")
+        ax.axhline(0.0, color="#555555", linewidth=0.8)
+        ax.set_xlabel(r"$\Re\{s\}$ [1/s]")
+        ax.set_ylabel(r"$\Im\{s\}$ [1/s]")
+        ax.set_title(r"Wurzelortskurve fuer $1 + K G_0(s) = 0$")
+        ax.grid(self.grid_var.get(), which="both")
+        x_span, y_span = self._set_root_locus_limits(ax, loci, open_poles, open_zeros)
+        self._draw_root_locus_damping_grid(ax)
+
+        span_ratio = max(x_span, y_span) / max(min(x_span, y_span), np.finfo(float).eps)
+        use_equal_axis = self.root_locus_equal_axis_var.get() and span_ratio <= 8.0
+        if use_equal_axis:
+            ax.set_aspect("equal", adjustable="box")
+        else:
+            ax.set_aspect("auto")
+
+        if marker_poles.size and np.all(marker_poles.real < -1e-9):
+            marker_status = "asymptotisch stabil"
+        elif marker_poles.size and np.all(marker_poles.real <= 1e-9):
+            marker_status = "grenzstabil im numerischen Raster"
+        else:
+            marker_status = "instabil"
+        stability_text = (
+            f"K = {marker_gain:.5g}: {marker_status}\n"
+            + self._sampled_stable_gain_text(locus_gains, loci)
+        )
+        if self.root_locus_equal_axis_var.get() and not use_equal_axis:
+            stability_text += "\nGleichskalierung wegen stark unterschiedlicher Achsbereiche automatisch deaktiviert."
+        ax.text(
+            0.02,
+            0.02,
+            stability_text,
+            transform=ax.transAxes,
+            fontsize=8.5,
+            va="bottom",
+            ha="left",
+            bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+        )
+
+        hover_x = []
+        hover_y = []
+        hover_gain = []
+        for branch in range(loci.shape[1]):
+            branch_values = loci[:, branch]
+            finite = np.isfinite(branch_values.real) & np.isfinite(branch_values.imag)
+            hover_x.extend(branch_values.real[finite])
+            hover_y.extend(branch_values.imag[finite])
+            hover_gain.extend(locus_gains[finite])
+        self._register_hover(
+            ax,
+            "root_locus",
+            np.asarray(hover_x),
+            np.asarray(hover_y),
+            gain=np.asarray(hover_gain),
+        )
+
+        ax.legend(loc="best", fontsize=8)
+        self.fig_root_locus.subplots_adjust(left=0.09, right=0.98, bottom=0.11, top=0.92)
+        self.canvas_root_locus.draw_idle()
+
     def _update_latex_preview(self, data):
         ax = self.ax_latex
         ax.clear()
@@ -2376,9 +2814,14 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(f"Nyquist-System: {self.nyquist_plot_system_var.get()}")
         text_lines.append(f"Bode-System: {self.bode_plot_system_var.get()}")
         text_lines.append(f"Sprungantwort-System: {self.step_plot_system_var.get()}")
+        text_lines.append(
+            "Wurzelortskurve: "
+            f"K = {data['root_locus_gains'][0]:.6g} bis {data['root_locus_gains'][-1]:.6g}, "
+            f"markiert K = {data['root_locus_marker_gain']:.6g}"
+        )
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
         text_lines.append(f"Sprungfaktor: {data['step_amplitude']:.8g}")
-        text_lines.append(f"Padé-Ordnung für Zeitbereich: {data['pade_order']}")
+        text_lines.append(f"Padé-Ordnung für Zeitbereich und Wurzelortskurve: {data['pade_order']}")
         text_lines.append("")
         text_lines.append("Rationaler Anteil:")
         text_lines.append(str(data["sys_rational"]))
@@ -2389,7 +2832,7 @@ class ControlExplorerApp(tk.Tk):
         if data["delay"] > 0:
             text_lines.append(
                 "  Hinweis: Wegen der Totzeit ist G(s) nicht rational; die Darstellung mit exp(-Ts) ist exakt. "
-                "Nur Zeitantwort und sisotool verwenden die Padé-Näherung."
+                "Zeitantwort und sisotool sowie optional die Wurzelortskurve verwenden die Padé-Näherung."
             )
         text_lines.append("")
 
@@ -2467,7 +2910,7 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append("Hinweis:")
         text_lines.append(
             "Nyquist und Bode verwenden die Totzeit exakt im Frequenzbereich. "
-            "Die Sprungantwort verwendet stattdessen die eingestellte Padé-Approximation."
+            "Sprungantwort und optional die Wurzelortskurve verwenden stattdessen die eingestellte Padé-Approximation."
         )
 
         self.info_text.configure(state=tk.NORMAL)
