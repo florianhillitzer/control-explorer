@@ -59,6 +59,7 @@ class ControlExplorerApp(tk.Tk):
         "root_locus_gain_max": "1e3",
         "root_locus_points": "800",
         "root_locus_marker_gain": "1",
+        "root_locus_show_closed_poles": True,
         "root_locus_log_gain": True,
         "root_locus_include_delay": False,
         "root_locus_equal_axis": False,
@@ -86,7 +87,7 @@ class ControlExplorerApp(tk.Tk):
         super().__init__()
         self._native_icon_handles = []
 
-        self.title("Control Explorer - Nyquist, Bode, Sprungantwort")
+        self.title("Control Explorer - Nyquist, Bode, Wurzelortskurve, Sprungantwort")
         self._set_window_icon()
         self.geometry("1300x820")
         self.minsize(1050, 650)
@@ -240,6 +241,7 @@ class ControlExplorerApp(tk.Tk):
         self.root_locus_gain_max_var = tk.StringVar(value=defaults["root_locus_gain_max"])
         self.root_locus_points_var = tk.StringVar(value=defaults["root_locus_points"])
         self.root_locus_marker_gain_var = tk.StringVar(value=defaults["root_locus_marker_gain"])
+        self.root_locus_show_closed_poles_var = tk.BooleanVar(value=defaults["root_locus_show_closed_poles"])
         self.root_locus_log_gain_var = tk.BooleanVar(value=defaults["root_locus_log_gain"])
         self.root_locus_include_delay_var = tk.BooleanVar(value=defaults["root_locus_include_delay"])
         self.root_locus_equal_axis_var = tk.BooleanVar(value=defaults["root_locus_equal_axis"])
@@ -277,6 +279,7 @@ class ControlExplorerApp(tk.Tk):
             "root_locus_gain_max": self.root_locus_gain_max_var,
             "root_locus_points": self.root_locus_points_var,
             "root_locus_marker_gain": self.root_locus_marker_gain_var,
+            "root_locus_show_closed_poles": self.root_locus_show_closed_poles_var,
             "root_locus_log_gain": self.root_locus_log_gain_var,
             "root_locus_include_delay": self.root_locus_include_delay_var,
             "root_locus_equal_axis": self.root_locus_equal_axis_var,
@@ -507,13 +510,12 @@ class ControlExplorerApp(tk.Tk):
         self._add_entry(gain_box, "K min", self.root_locus_gain_min_var, 0, 0)
         self._add_entry(gain_box, "K max", self.root_locus_gain_max_var, 1, 0)
         self._add_entry(gain_box, "Punkte", self.root_locus_points_var, 2, 0)
-        self._add_entry(gain_box, "Markierter Wert K", self.root_locus_marker_gain_var, 3, 0)
         ttk.Checkbutton(
             gain_box,
             text="K logarithmisch abtasten",
             variable=self.root_locus_log_gain_var,
             command=self.schedule_update,
-        ).grid(row=4, column=0, sticky="w", padx=6, pady=3)
+        ).grid(row=3, column=0, sticky="w", padx=6, pady=3)
 
         display_box = ttk.LabelFrame(parent, text="Darstellung")
         display_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -727,17 +729,23 @@ class ControlExplorerApp(tk.Tk):
 
         root_locus_options = ttk.Frame(self.tab_root_locus, padding=(0, 0, 0, 4))
         root_locus_options.pack(side=tk.TOP, fill=tk.X)
-        ttk.Label(root_locus_options, text="Markierter Entwurfswert K:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(
+        ttk.Checkbutton(
             root_locus_options,
+            text="geschlossene Pole anzeigen",
+            variable=self.root_locus_show_closed_poles_var,
+            command=self._on_root_locus_closed_poles_changed,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        self.root_locus_marker_controls = ttk.Frame(root_locus_options)
+        ttk.Label(
+            self.root_locus_marker_controls,
+            text="Markierter Entwurfswert K:",
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Entry(
+            self.root_locus_marker_controls,
             textvariable=self.root_locus_marker_gain_var,
             width=12,
         ).pack(side=tk.LEFT)
-        ttk.Label(
-            root_locus_options,
-            text="Basis: offener Kreis; Totzeit optional ueber Pade",
-            foreground="#555555",
-        ).pack(side=tk.LEFT, padx=(10, 0))
+        self._update_root_locus_marker_controls()
 
         self._create_tab_plot_system_selector(
             self.tab_step,
@@ -769,6 +777,20 @@ class ControlExplorerApp(tk.Tk):
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
         self.info_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.info_text.configure(state=tk.DISABLED)
+
+    def _update_root_locus_marker_controls(self):
+        controls = getattr(self, "root_locus_marker_controls", None)
+        if controls is None:
+            return
+        if self.root_locus_show_closed_poles_var.get():
+            if not controls.winfo_manager():
+                controls.pack(side=tk.LEFT)
+        elif controls.winfo_manager():
+            controls.pack_forget()
+
+    def _on_root_locus_closed_poles_changed(self):
+        self._update_root_locus_marker_controls()
+        self.schedule_update()
 
     def _embed_figure(self, parent, fig):
         canvas = FigureCanvasTkAgg(fig, master=parent)
@@ -1267,6 +1289,10 @@ class ControlExplorerApp(tk.Tk):
     def _bind_events(self):
         for variable in self._settings_variables().values():
             variable.trace_add("write", lambda *_: self._on_setting_changed())
+        self.root_locus_show_closed_poles_var.trace_add(
+            "write",
+            lambda *_: self._update_root_locus_marker_controls(),
+        )
 
         self.delay_var.trace_add("write", lambda *_: self.schedule_update())
 
@@ -1349,7 +1375,9 @@ class ControlExplorerApp(tk.Tk):
         root_locus_gain_min = float(eval(self.root_locus_gain_min_var.get(), env, env))
         root_locus_gain_max = float(eval(self.root_locus_gain_max_var.get(), env, env))
         root_locus_points = int(float(eval(self.root_locus_points_var.get(), env, env)))
-        root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
+        root_locus_marker_gain = None
+        if self.root_locus_show_closed_poles_var.get():
+            root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
@@ -1365,17 +1393,19 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Unbekannte Bode-Frequenzeinheit.")
         if bode_frequency_min <= 0 or bode_frequency_max <= bode_frequency_min:
             raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
-        if not np.all(np.isfinite([
-            root_locus_gain_min,
-            root_locus_gain_max,
-            root_locus_marker_gain,
-        ])):
+        gain_values = [root_locus_gain_min, root_locus_gain_max]
+        if root_locus_marker_gain is not None:
+            gain_values.append(root_locus_marker_gain)
+        if not np.all(np.isfinite(gain_values)):
             raise ValueError("Die Verstaerkungswerte der Wurzelortskurve muessen endlich sein.")
         if root_locus_gain_min < 0 or root_locus_gain_max <= root_locus_gain_min:
             raise ValueError("Fuer die Wurzelortskurve muss 0 <= K min < K max gelten.")
         if root_locus_points < 10:
             raise ValueError("Die Wurzelortskurve benoetigt mindestens 10 Verstaerkungspunkte.")
-        if not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max:
+        if (
+            root_locus_marker_gain is not None
+            and not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max
+        ):
             raise ValueError("Der markierte Wert K muss zwischen K min und K max liegen.")
         if t_max <= 0:
             raise ValueError("t_max muss > 0 sein.")
@@ -1409,7 +1439,8 @@ class ControlExplorerApp(tk.Tk):
                 root_locus_gain_max,
                 root_locus_points,
             )
-        root_locus_gains = np.unique(np.append(root_locus_gains, root_locus_marker_gain))
+        if root_locus_marker_gain is not None:
+            root_locus_gains = np.unique(np.append(root_locus_gains, root_locus_marker_gain))
         t = np.linspace(0.0, t_max, t_points)
 
         markers = self._parse_marker_frequencies(env)
@@ -2469,6 +2500,93 @@ class ControlExplorerApp(tk.Tk):
         ax.set_ylim(y_min - y_padding, y_max + y_padding)
         return x_span, y_span
 
+    @staticmethod
+    def _draw_root_locus_direction_arrows(ax, loci):
+        for branch in range(loci.shape[1]):
+            points = np.asarray(loci[:, branch], dtype=complex)
+            finite = np.isfinite(points.real) & np.isfinite(points.imag)
+            points = points[finite]
+            if points.size < 2:
+                continue
+
+            segment_lengths = np.abs(np.diff(points))
+            cumulative = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+            total_length = cumulative[-1]
+            if not np.isfinite(total_length) or total_length <= np.finfo(float).eps:
+                continue
+
+            for fraction in (0.35, 0.7):
+                center = fraction * total_length
+                start_distance = max(0.0, center - 0.025 * total_length)
+                end_distance = min(total_length, center + 0.025 * total_length)
+                start = complex(
+                    np.interp(start_distance, cumulative, points.real),
+                    np.interp(start_distance, cumulative, points.imag),
+                )
+                end = complex(
+                    np.interp(end_distance, cumulative, points.real),
+                    np.interp(end_distance, cumulative, points.imag),
+                )
+                if abs(end - start) <= 1e-10 * max(total_length, 1.0):
+                    continue
+
+                ax.annotate(
+                    "",
+                    xy=(end.real, end.imag),
+                    xytext=(start.real, start.imag),
+                    arrowprops={
+                        "arrowstyle": "-|>",
+                        "color": "#1f77b4",
+                        "linewidth": 1.3,
+                        "mutation_scale": 12,
+                        "shrinkA": 0,
+                        "shrinkB": 0,
+                    },
+                    zorder=4,
+                )
+
+    @staticmethod
+    def _group_pole_multiplicities(poles, rtol=2e-5, atol=1e-8):
+        poles = np.asarray(poles, dtype=complex).reshape(-1)
+        finite = np.isfinite(poles.real) & np.isfinite(poles.imag)
+        poles = poles[finite]
+        groups = []
+
+        for pole in sorted(poles, key=lambda value: (value.real, value.imag)):
+            for group in groups:
+                center = group["sum"] / group["count"]
+                tolerance = atol + rtol * max(1.0, abs(center), abs(pole))
+                if abs(pole - center) <= tolerance:
+                    group["sum"] += pole
+                    group["count"] += 1
+                    break
+            else:
+                groups.append({"sum": pole, "count": 1})
+
+        return [
+            (group["sum"] / group["count"], group["count"])
+            for group in groups
+        ]
+
+    @staticmethod
+    def _annotate_pole_multiplicities(ax, pole_groups, color, offset):
+        for pole, multiplicity in pole_groups:
+            if multiplicity <= 1:
+                continue
+            ax.annotate(
+                rf"$\times {multiplicity}$",
+                xy=(pole.real, pole.imag),
+                xytext=offset,
+                textcoords="offset points",
+                color=color,
+                fontsize=9,
+                fontweight="bold",
+                ha="left",
+                va="bottom",
+                zorder=7,
+                annotation_clip=False,
+            )
+
     def _plot_root_locus(self, sys_root_locus, gains, marker_gain):
         ax = self.ax_root_locus
         ax.clear()
@@ -2499,19 +2617,28 @@ class ControlExplorerApp(tk.Tk):
                     linewidth=1.6,
                     label="Wurzelortskurve" if branch == 0 else None,
                 )
+        self._draw_root_locus_direction_arrows(ax, loci)
 
         open_poles = np.asarray(response.poles, dtype=complex).reshape(-1)
         open_zeros = np.asarray(response.zeros, dtype=complex).reshape(-1)
         if open_poles.size:
+            open_pole_groups = self._group_pole_multiplicities(open_poles)
+            unique_open_poles = np.asarray([pole for pole, _multiplicity in open_pole_groups])
             ax.plot(
-                open_poles.real,
-                open_poles.imag,
+                unique_open_poles.real,
+                unique_open_poles.imag,
                 linestyle="none",
                 marker="x",
                 color="#d62728",
                 markersize=9,
                 markeredgewidth=2,
                 label="Offene Pole",
+            )
+            self._annotate_pole_multiplicities(
+                ax,
+                open_pole_groups,
+                color="#d62728",
+                offset=(7, 5),
             )
         if open_zeros.size:
             ax.plot(
@@ -2526,20 +2653,31 @@ class ControlExplorerApp(tk.Tk):
                 label="Offene Nullstellen",
             )
 
-        marker_index = int(np.argmin(np.abs(locus_gains - marker_gain)))
-        marker_poles = loci[marker_index]
-        finite_marker = np.isfinite(marker_poles.real) & np.isfinite(marker_poles.imag)
-        marker_poles = marker_poles[finite_marker]
-        if marker_poles.size:
-            ax.plot(
-                marker_poles.real,
-                marker_poles.imag,
-                linestyle="none",
-                marker="D",
-                color="#ff7f0e",
-                markersize=6,
-                label=rf"Geschlossene Pole bei $K={marker_gain:.4g}$",
-            )
+        marker_poles = np.array([], dtype=complex)
+        show_closed_poles = self.root_locus_show_closed_poles_var.get() and marker_gain is not None
+        if show_closed_poles:
+            marker_index = int(np.argmin(np.abs(locus_gains - marker_gain)))
+            marker_poles = loci[marker_index]
+            finite_marker = np.isfinite(marker_poles.real) & np.isfinite(marker_poles.imag)
+            marker_poles = marker_poles[finite_marker]
+            if marker_poles.size:
+                marker_pole_groups = self._group_pole_multiplicities(marker_poles)
+                unique_marker_poles = np.asarray([pole for pole, _multiplicity in marker_pole_groups])
+                ax.plot(
+                    unique_marker_poles.real,
+                    unique_marker_poles.imag,
+                    linestyle="none",
+                    marker="D",
+                    color="#ff7f0e",
+                    markersize=6,
+                    label=rf"Geschlossene Pole bei $K={marker_gain:.4g}$",
+                )
+                self._annotate_pole_multiplicities(
+                    ax,
+                    marker_pole_groups,
+                    color="#ff7f0e",
+                    offset=(7, -14),
+                )
 
         ax.axvline(0.0, color="black", linewidth=1.0, linestyle="--", label="Stabilitaetsgrenze")
         ax.axhline(0.0, color="#555555", linewidth=0.8)
@@ -2557,18 +2695,21 @@ class ControlExplorerApp(tk.Tk):
         else:
             ax.set_aspect("auto")
 
-        if marker_poles.size and np.all(marker_poles.real < -1e-9):
-            marker_status = "asymptotisch stabil"
-        elif marker_poles.size and np.all(marker_poles.real <= 1e-9):
-            marker_status = "grenzstabil im numerischen Raster"
-        else:
-            marker_status = "instabil"
-        stability_text = (
-            f"K = {marker_gain:.5g}: {marker_status}\n"
-            + self._sampled_stable_gain_text(locus_gains, loci)
-        )
+        stability_lines = []
+        if show_closed_poles:
+            if marker_poles.size and np.all(marker_poles.real < -1e-9):
+                marker_status = "asymptotisch stabil"
+            elif marker_poles.size and np.all(marker_poles.real <= 1e-9):
+                marker_status = "grenzstabil im numerischen Raster"
+            else:
+                marker_status = "instabil"
+            stability_lines.append(f"K = {marker_gain:.5g}: {marker_status}")
+        stability_lines.append(self._sampled_stable_gain_text(locus_gains, loci))
         if self.root_locus_equal_axis_var.get() and not use_equal_axis:
-            stability_text += "\nGleichskalierung wegen stark unterschiedlicher Achsbereiche automatisch deaktiviert."
+            stability_lines.append(
+                "Gleichskalierung wegen stark unterschiedlicher Achsbereiche automatisch deaktiviert."
+            )
+        stability_text = "\n".join(stability_lines)
         ax.text(
             0.02,
             0.02,
@@ -2814,11 +2955,13 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(f"Nyquist-System: {self.nyquist_plot_system_var.get()}")
         text_lines.append(f"Bode-System: {self.bode_plot_system_var.get()}")
         text_lines.append(f"Sprungantwort-System: {self.step_plot_system_var.get()}")
-        text_lines.append(
+        root_locus_info = (
             "Wurzelortskurve: "
-            f"K = {data['root_locus_gains'][0]:.6g} bis {data['root_locus_gains'][-1]:.6g}, "
-            f"markiert K = {data['root_locus_marker_gain']:.6g}"
+            f"K = {data['root_locus_gains'][0]:.6g} bis {data['root_locus_gains'][-1]:.6g}"
         )
+        if data["root_locus_marker_gain"] is not None:
+            root_locus_info += f", geschlossene Pole markiert bei K = {data['root_locus_marker_gain']:.6g}"
+        text_lines.append(root_locus_info)
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
         text_lines.append(f"Sprungfaktor: {data['step_amplitude']:.8g}")
         text_lines.append(f"Padé-Ordnung für Zeitbereich und Wurzelortskurve: {data['pade_order']}")

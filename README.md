@@ -2,7 +2,7 @@
 
 Desktop-GUI zur Untersuchung von SISO-Uebertragungsfunktionen mit Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und `python-control` SISO Tool.
 
-Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K G_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich. Offene Pole und Nullstellen, ein markierbarer Entwurfswert, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert.
+Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K G_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich. Richtungspfeile, offene Pole und Nullstellen, optional markierbare geschlossene Pole, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert.
 
 ## Direkt aus Python starten
 
