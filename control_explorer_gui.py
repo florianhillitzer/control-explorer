@@ -44,6 +44,8 @@ class ControlExplorerApp(tk.Tk):
     SYSTEM_OPEN = r"Offener Kreis G_0(s)"
     SYSTEM_CLOSED = r"Geschlossener Kreis G(s)"
     SYSTEM_SENS = "Sensitivitaet S(s)"
+    BODE_UNIT_OMEGA = "rad/s"
+    BODE_UNIT_HZ = "Hz"
 
     DEFAULT_SETTINGS = {
         "omega_min": "0",
@@ -51,6 +53,7 @@ class ControlExplorerApp(tk.Tk):
         "n_points": "6000",
         "bode_x_min": "1e-1",
         "bode_x_max": "1e3",
+        "bode_frequency_unit": BODE_UNIT_OMEGA,
         "show_bode_margins": False,
         "t_max": "20",
         "t_points": "2000",
@@ -221,6 +224,7 @@ class ControlExplorerApp(tk.Tk):
         self.n_points_var = tk.StringVar(value=defaults["n_points"])
         self.bode_x_min_var = tk.StringVar(value=defaults["bode_x_min"])
         self.bode_x_max_var = tk.StringVar(value=defaults["bode_x_max"])
+        self.bode_frequency_unit_var = tk.StringVar(value=defaults["bode_frequency_unit"])
         self.show_bode_margins_var = tk.BooleanVar(value=defaults["show_bode_margins"])
 
         self.t_max_var = tk.StringVar(value=defaults["t_max"])
@@ -248,6 +252,7 @@ class ControlExplorerApp(tk.Tk):
             "n_points": self.n_points_var,
             "bode_x_min": self.bode_x_min_var,
             "bode_x_max": self.bode_x_max_var,
+            "bode_frequency_unit": self.bode_frequency_unit_var,
             "show_bode_margins": self.show_bode_margins_var,
             "t_max": self.t_max_var,
             "t_points": self.t_points_var,
@@ -423,11 +428,22 @@ class ControlExplorerApp(tk.Tk):
         bode_box.columnconfigure(0, weight=1)
         self._add_entry(bode_box, "Linke Grenze", self.bode_x_min_var, 0, 0)
         self._add_entry(bode_box, "Rechte Grenze", self.bode_x_max_var, 1, 0)
+        unit_frame = ttk.Frame(bode_box)
+        unit_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=3)
+        unit_frame.columnconfigure(1, weight=1)
+        ttk.Label(unit_frame, text="Frequenzeinheit").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Combobox(
+            unit_frame,
+            textvariable=self.bode_frequency_unit_var,
+            values=[self.BODE_UNIT_OMEGA, self.BODE_UNIT_HZ],
+            state="readonly",
+            width=14,
+        ).grid(row=0, column=1, sticky="ew")
         ttk.Label(
             bode_box,
-            text="Beispiel: 1e-1 bis 1e3 entspricht 10^-1 bis 10^3 rad/s.",
+            text="Die Grenzen werden in der gewaehlten Einheit interpretiert.",
             foreground="#555555",
-        ).grid(row=2, column=0, sticky="w", padx=6, pady=(2, 6))
+        ).grid(row=3, column=0, sticky="w", padx=6, pady=(2, 6))
 
         marker_frame = ttk.Frame(parent)
         marker_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=3)
@@ -1060,16 +1076,32 @@ class ControlExplorerApp(tk.Tk):
                 rf"$\left|H(j\omega)\right| = {abs(complex(x[idx], y[idx])):.5g}$"
             )
         elif kind == "bode_mag":
+            if data["frequency_unit"] == self.BODE_UNIT_HZ:
+                frequency_text = rf"$f = {x[idx]:.5g}\,\mathrm{{Hz}}$"
+                response_text = rf"$\left|H(j2\pi f)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$"
+                phase_text = rf"$\varphi(f) = {data['phase'][idx]:.5g}^\circ$"
+            else:
+                frequency_text = rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$"
+                response_text = rf"$\left|H(j\omega)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$"
+                phase_text = rf"$\varphi(\omega) = {data['phase'][idx]:.5g}^\circ$"
             text = (
-                rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$" "\n"
-                rf"$\left|H(j\omega)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$" "\n"
-                rf"$\varphi(\omega) = {data['phase'][idx]:.5g}^\circ$"
+                frequency_text + "\n"
+                + response_text + "\n"
+                + phase_text
             )
         elif kind == "bode_phase":
+            if data["frequency_unit"] == self.BODE_UNIT_HZ:
+                frequency_text = rf"$f = {x[idx]:.5g}\,\mathrm{{Hz}}$"
+                phase_text = rf"$\varphi(f) = {y[idx]:.5g}^\circ$"
+                response_text = rf"$\left|H(j2\pi f)\right| = {data['magnitude'][idx]:.5g}\,\mathrm{{dB}}$"
+            else:
+                frequency_text = rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$"
+                phase_text = rf"$\varphi(\omega) = {y[idx]:.5g}^\circ$"
+                response_text = rf"$\left|H(j\omega)\right| = {data['magnitude'][idx]:.5g}\,\mathrm{{dB}}$"
             text = (
-                rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$" "\n"
-                rf"$\varphi(\omega) = {y[idx]:.5g}^\circ$" "\n"
-                rf"$\left|H(j\omega)\right| = {data['magnitude'][idx]:.5g}\,\mathrm{{dB}}$"
+                frequency_text + "\n"
+                + phase_text + "\n"
+                + response_text
             )
         else:
             text = (
@@ -1128,6 +1160,18 @@ class ControlExplorerApp(tk.Tk):
     # ------------------------------------------------------------------
     # Parsing and computation
     # ------------------------------------------------------------------
+    def _bode_frequency_to_omega(self, frequency):
+        values = np.asarray(frequency, dtype=float)
+        if self.bode_frequency_unit_var.get() == self.BODE_UNIT_HZ:
+            values = 2.0 * np.pi * values
+        return float(values) if np.isscalar(frequency) else values
+
+    def _omega_to_bode_frequency(self, omega):
+        values = np.asarray(omega, dtype=float)
+        if self.bode_frequency_unit_var.get() == self.BODE_UNIT_HZ:
+            values = values / (2.0 * np.pi)
+        return float(values) if np.isscalar(omega) else values
+
     def _base_eval_environment(self):
         s = ct.TransferFunction.s
 
@@ -1175,8 +1219,8 @@ class ControlExplorerApp(tk.Tk):
         omega_min = float(eval(self.omega_min_var.get(), env, env))
         omega_max = float(eval(self.omega_max_var.get(), env, env))
         n_points = int(float(eval(self.n_points_var.get(), env, env)))
-        bode_x_min = float(eval(self.bode_x_min_var.get(), env, env))
-        bode_x_max = float(eval(self.bode_x_max_var.get(), env, env))
+        bode_frequency_min = float(eval(self.bode_x_min_var.get(), env, env))
+        bode_frequency_max = float(eval(self.bode_x_max_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
@@ -1188,7 +1232,9 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("ω_max muss größer als ω_min sein.")
         if n_points < 10:
             raise ValueError("Die Anzahl der Frequenzpunkte muss mindestens 10 sein.")
-        if bode_x_min <= 0 or bode_x_max <= bode_x_min:
+        if self.bode_frequency_unit_var.get() not in (self.BODE_UNIT_OMEGA, self.BODE_UNIT_HZ):
+            raise ValueError("Unbekannte Bode-Frequenzeinheit.")
+        if bode_frequency_min <= 0 or bode_frequency_max <= bode_frequency_min:
             raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
         if t_max <= 0:
             raise ValueError("t_max muss > 0 sein.")
@@ -1200,7 +1246,9 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Die Padé-Ordnung muss >= 0 sein.")
 
         omega = np.linspace(omega_min, omega_max, n_points)
-        bode_omega = np.logspace(np.log10(bode_x_min), np.log10(bode_x_max), n_points)
+        bode_omega_min = self._bode_frequency_to_omega(bode_frequency_min)
+        bode_omega_max = self._bode_frequency_to_omega(bode_frequency_max)
+        bode_omega = np.logspace(np.log10(bode_omega_min), np.log10(bode_omega_max), n_points)
         t = np.linspace(0.0, t_max, t_points)
 
         markers = self._parse_marker_frequencies(env)
@@ -1213,8 +1261,8 @@ class ControlExplorerApp(tk.Tk):
             "delay": delay,
             "omega": omega,
             "bode_omega": bode_omega,
-            "bode_x_min": bode_x_min,
-            "bode_x_max": bode_x_max,
+            "bode_x_min": bode_omega_min,
+            "bode_x_max": bode_omega_max,
             "t": t,
             "step_amplitude": step_amplitude,
             "pade_order": pade_order,
@@ -1915,6 +1963,9 @@ class ControlExplorerApp(tk.Tk):
     def _plot_bode_margins(self, ax_mag, ax_phase, omega, L_open, sys_rational=None):
         margins = self._compute_bode_margins_from_response(omega, L_open)
         integrator_order = self._count_origin_integrators(sys_rational) if sys_rational is not None else 0
+        use_hz = self.bode_frequency_unit_var.get() == self.BODE_UNIT_HZ
+        gain_frequency_label = r"$f_\pi$ für $A_R$" if use_hz else r"$\omega_\pi$ für $A_R$"
+        phase_frequency_label = r"$f_c$ für $\varphi_R$" if use_hz else r"$\omega_c$ für $\varphi_R$"
 
         ax_mag.axhline(0.0, linestyle=":", linewidth=1.0, color="black", label=r"$0\,\mathrm{dB}$")
         ax_phase.axhline(-180.0, linestyle=":", linewidth=1.0, color="black", label=r"$-180^\circ$")
@@ -1922,63 +1973,75 @@ class ControlExplorerApp(tk.Tk):
         gm = margins["gain_margin"]
         if gm is not None:
             wp = gm["omega"]
+            plot_wp = self._omega_to_bode_frequency(wp)
             mag_db_at_wp = gm["mag_db"]
-            ax_mag.axvline(wp, linestyle=":", linewidth=1.0, color="black")
-            ax_phase.axvline(wp, linestyle=":", linewidth=1.0, color="black")
+            ax_mag.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
+            ax_phase.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
             ax_mag.plot(
-                wp,
+                plot_wp,
                 mag_db_at_wp,
                 "o",
                 markersize=5,
-                label=r"$\omega_\pi$ für $A_R$",
+                label=gain_frequency_label,
             )
             ax_phase.plot(
-                wp,
+                plot_wp,
                 gm["target_phase_deg"],
                 "o",
                 markersize=5,
-                label=r"$\omega_\pi$ für $A_R$",
+                label=gain_frequency_label,
             )
-            ax_mag.vlines(wp, mag_db_at_wp, 0.0, linestyle=":", linewidth=1.2, color="black")
+            ax_mag.vlines(plot_wp, mag_db_at_wp, 0.0, linestyle=":", linewidth=1.2, color="black")
+            gain_frequency_text = (
+                rf"$f_\pi={plot_wp:.3g}\,\mathrm{{Hz}}$"
+                if use_hz
+                else rf"$\omega_\pi={plot_wp:.3g}\,\mathrm{{rad/s}}$"
+            )
             self._annotate_inside_axes(
                 ax_mag,
                 rf"$A_R={gm['gain_margin']:.3g}$"
                 "\n"
                 rf"$={gm['gain_margin_db']:.2f}\,\mathrm{{dB}}$"
                 "\n"
-                rf"$\omega_\pi={wp:.3g}$",
-                xy=(wp, mag_db_at_wp),
+                + gain_frequency_text,
+                xy=(plot_wp, mag_db_at_wp),
                 fontsize=9,
             )
 
         pm = margins["phase_margin"]
         if pm is not None:
             wc = pm["omega"]
+            plot_wc = self._omega_to_bode_frequency(wc)
             phase_at_wc = pm["phase_deg"]
-            ax_mag.axvline(wc, linestyle="--", linewidth=1.0, color="black")
-            ax_phase.axvline(wc, linestyle="--", linewidth=1.0, color="black")
+            ax_mag.axvline(plot_wc, linestyle="--", linewidth=1.0, color="black")
+            ax_phase.axvline(plot_wc, linestyle="--", linewidth=1.0, color="black")
             ax_mag.plot(
-                wc,
+                plot_wc,
                 0.0,
                 "s",
                 markersize=5,
-                label=r"$\omega_c$ für $\varphi_R$",
+                label=phase_frequency_label,
             )
 
             ax_phase.plot(
-                wc,
+                plot_wc,
                 phase_at_wc,
                 "s",
                 markersize=5,
-                label=r"$\omega_c$ für $\varphi_R$",
+                label=phase_frequency_label,
             )
-            ax_phase.vlines(wc, -180.0, phase_at_wc, linestyle="--", linewidth=1.2, color="black")
+            ax_phase.vlines(plot_wc, -180.0, phase_at_wc, linestyle="--", linewidth=1.2, color="black")
+            phase_frequency_text = (
+                rf"$f_c={plot_wc:.3g}\,\mathrm{{Hz}}$"
+                if use_hz
+                else rf"$\omega_c={plot_wc:.3g}\,\mathrm{{rad/s}}$"
+            )
             self._annotate_inside_axes(
                 ax_phase,
                 rf"$\varphi_R={pm['phase_margin_deg']:.2f}^\circ$"
                 "\n"
-                rf"$\omega_c={wc:.3g}$",
-                xy=(wc, phase_at_wc),
+                + phase_frequency_text,
+                xy=(plot_wc, phase_at_wc),
                 fontsize=9,
             )
 
@@ -2035,22 +2098,29 @@ class ControlExplorerApp(tk.Tk):
 
         w = omega[mask]
         H_w = H[mask]
+        plot_frequency = self._omega_to_bode_frequency(w)
+        frequency_unit = self.bode_frequency_unit_var.get()
 
         mag_db = 20.0 * np.log10(np.maximum(np.abs(H_w), np.finfo(float).tiny))
         phase_deg = np.unwrap(np.angle(H_w)) * 180.0 / np.pi
 
-        ax_mag.semilogx(w, mag_db, linewidth=2, label=self.bode_plot_system_var.get())
-        ax_mag.set_ylabel(r"$|H(j\omega)|$ [dB]")
+        ax_mag.semilogx(plot_frequency, mag_db, linewidth=2, label=self.bode_plot_system_var.get())
         ax_mag.set_title(f"Frequenzgang / Bode - {self.bode_plot_system_var.get()}")
         ax_mag.grid(self.grid_var.get(), which="both")
 
-        ax_phase.semilogx(w, phase_deg, linewidth=2, label=self.bode_plot_system_var.get())
-        ax_phase.set_xlabel(r"$\omega$ [rad/s]")
-        ax_phase.set_ylabel(r"$\arg H(j\omega)$ [deg]")
+        ax_phase.semilogx(plot_frequency, phase_deg, linewidth=2, label=self.bode_plot_system_var.get())
+        if frequency_unit == self.BODE_UNIT_HZ:
+            ax_mag.set_ylabel(r"$|H(j2\pi f)|$ [dB]")
+            ax_phase.set_xlabel(r"$f$ [Hz]")
+            ax_phase.set_ylabel(r"$\arg H(j2\pi f)$ [deg]")
+        else:
+            ax_mag.set_ylabel(r"$|H(j\omega)|$ [dB]")
+            ax_phase.set_xlabel(r"$\omega$ [rad/s]")
+            ax_phase.set_ylabel(r"$\arg H(j\omega)$ [deg]")
         ax_phase.grid(self.grid_var.get(), which="both")
 
-        ax_mag.set_xlim(left=float(w[0]), right=float(w[-1]))
-        ax_phase.set_xlim(left=float(w[0]), right=float(w[-1]))
+        ax_mag.set_xlim(left=float(plot_frequency[0]), right=float(plot_frequency[-1]))
+        ax_phase.set_xlim(left=float(plot_frequency[0]), right=float(plot_frequency[-1]))
 
         if self.show_bode_margins_var.get():
             if self.bode_plot_system_var.get() == self.SYSTEM_OPEN and L_open is not None:
@@ -2073,8 +2143,22 @@ class ControlExplorerApp(tk.Tk):
         if ax_phase.get_legend_handles_labels()[0]:
             ax_phase.legend(loc="best", fontsize=8)
 
-        self._register_hover(ax_mag, "bode_mag", w, mag_db, phase=phase_deg)
-        self._register_hover(ax_phase, "bode_phase", w, phase_deg, magnitude=mag_db)
+        self._register_hover(
+            ax_mag,
+            "bode_mag",
+            plot_frequency,
+            mag_db,
+            phase=phase_deg,
+            frequency_unit=frequency_unit,
+        )
+        self._register_hover(
+            ax_phase,
+            "bode_phase",
+            plot_frequency,
+            phase_deg,
+            magnitude=mag_db,
+            frequency_unit=frequency_unit,
+        )
 
         self.fig_bode.tight_layout()
         self.canvas_bode.draw_idle()
