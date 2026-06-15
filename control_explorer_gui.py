@@ -4,9 +4,11 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 import ctypes
 from ctypes import wintypes
+import ast
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import traceback
 import warnings
@@ -59,7 +61,7 @@ class ControlExplorerApp(tk.Tk):
         "root_locus_gain_max": "1e3",
         "root_locus_points": "800",
         "root_locus_marker_gain": "1",
-        "root_locus_show_closed_poles": True,
+        "root_locus_gain_parameter": "",
         "root_locus_log_gain": True,
         "root_locus_include_delay": False,
         "root_locus_equal_axis": False,
@@ -106,6 +108,7 @@ class ControlExplorerApp(tk.Tk):
         self._pending_hover = None
         self._last_hover_target = (None, None)
         self._sisotool_result = None
+        self._root_locus_click_data = None
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
@@ -238,7 +241,7 @@ class ControlExplorerApp(tk.Tk):
         self.root_locus_gain_max_var = tk.StringVar(value=defaults["root_locus_gain_max"])
         self.root_locus_points_var = tk.StringVar(value=defaults["root_locus_points"])
         self.root_locus_marker_gain_var = tk.StringVar(value=defaults["root_locus_marker_gain"])
-        self.root_locus_show_closed_poles_var = tk.BooleanVar(value=defaults["root_locus_show_closed_poles"])
+        self.root_locus_gain_parameter_var = tk.StringVar(value=defaults["root_locus_gain_parameter"])
         self.root_locus_log_gain_var = tk.BooleanVar(value=defaults["root_locus_log_gain"])
         self.root_locus_include_delay_var = tk.BooleanVar(value=defaults["root_locus_include_delay"])
         self.root_locus_equal_axis_var = tk.BooleanVar(value=defaults["root_locus_equal_axis"])
@@ -276,7 +279,7 @@ class ControlExplorerApp(tk.Tk):
             "root_locus_gain_max": self.root_locus_gain_max_var,
             "root_locus_points": self.root_locus_points_var,
             "root_locus_marker_gain": self.root_locus_marker_gain_var,
-            "root_locus_show_closed_poles": self.root_locus_show_closed_poles_var,
+            "root_locus_gain_parameter": self.root_locus_gain_parameter_var,
             "root_locus_log_gain": self.root_locus_log_gain_var,
             "root_locus_include_delay": self.root_locus_include_delay_var,
             "root_locus_equal_axis": self.root_locus_equal_axis_var,
@@ -653,6 +656,7 @@ class ControlExplorerApp(tk.Tk):
             "- Parameter koennen im oberen Feld definiert werden.\n"
             "- Frequenzplots nutzen die Totzeit exakt.\n"
             "- Sprungantwort und Wurzelortskurve koennen Pade fuer die Totzeit nutzen.\n"
+            "- Ein Klick auf die Wurzelortskurve uebernimmt den Gain in den Parametercode.\n"
             "- Frequenzbereich, Sprungantwort und Optionen liegen im Einstellungsfenster."
         )
         ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=9, column=0, sticky="w", pady=(4, 0))
@@ -726,23 +730,40 @@ class ControlExplorerApp(tk.Tk):
 
         root_locus_options = ttk.Frame(self.tab_root_locus, padding=(0, 0, 0, 4))
         root_locus_options.pack(side=tk.TOP, fill=tk.X)
-        ttk.Checkbutton(
+        ttk.Label(root_locus_options, text="Gain-Parameter:").pack(side=tk.LEFT, padx=(0, 6))
+        self.root_locus_gain_parameter_combo = ttk.Combobox(
             root_locus_options,
-            text="geschlossene Pole anzeigen",
-            variable=self.root_locus_show_closed_poles_var,
-            command=self._on_root_locus_closed_poles_changed,
-        ).pack(side=tk.LEFT, padx=(0, 10))
+            textvariable=self.root_locus_gain_parameter_var,
+            state="readonly",
+            width=10,
+            values=[],
+        )
+        self.root_locus_gain_parameter_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.root_locus_gain_parameter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.schedule_update(),
+        )
         self.root_locus_marker_controls = ttk.Frame(root_locus_options)
+        self.root_locus_marker_controls.pack(side=tk.LEFT)
         ttk.Label(
             self.root_locus_marker_controls,
             text="Markierter Entwurfswert K:",
         ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(
+        self.root_locus_marker_entry = ttk.Entry(
             self.root_locus_marker_controls,
             textvariable=self.root_locus_marker_gain_var,
             width=12,
-        ).pack(side=tk.LEFT)
-        self._update_root_locus_marker_controls()
+        )
+        self.root_locus_marker_entry.pack(side=tk.LEFT)
+        self.root_locus_marker_entry.bind(
+            "<Return>",
+            self._commit_root_locus_marker_entry,
+        )
+        ttk.Label(
+            root_locus_options,
+            text="WOK-Linie anklicken oder Wert eingeben und Enter druecken",
+            foreground="#555555",
+        ).pack(side=tk.LEFT, padx=(10, 0))
 
         self._create_tab_plot_system_selector(
             self.tab_step,
@@ -770,24 +791,135 @@ class ControlExplorerApp(tk.Tk):
         for canvas in (self.canvas_nyquist, self.canvas_bode, self.canvas_root_locus, self.canvas_step):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
             canvas.mpl_connect("draw_event", self._cache_hover_backgrounds)
+        self.canvas_root_locus.mpl_connect("button_press_event", self._on_root_locus_click)
 
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
         self.info_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.info_text.configure(state=tk.DISABLED)
 
-    def _update_root_locus_marker_controls(self):
-        controls = getattr(self, "root_locus_marker_controls", None)
-        if controls is None:
-            return
-        if self.root_locus_show_closed_poles_var.get():
-            if not controls.winfo_manager():
-                controls.pack(side=tk.LEFT)
-        elif controls.winfo_manager():
-            controls.pack_forget()
+    @staticmethod
+    def _replace_parameter_assignment(params_code, parameter_name, value_text):
+        pattern = re.compile(
+            rf"^(\s*{re.escape(parameter_name)}\s*=\s*)([^#]*?)(\s*(?:#.*)?)$"
+        )
+        lines = params_code.splitlines()
+        for index in range(len(lines) - 1, -1, -1):
+            match = pattern.match(lines[index])
+            if match:
+                lines[index] = f"{match.group(1)}{value_text}{match.group(3)}"
+                return "\n".join(lines)
 
-    def _on_root_locus_closed_poles_changed(self):
-        self._update_root_locus_marker_controls()
-        self.schedule_update()
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"{parameter_name} = {value_text}")
+        return "\n".join(lines)
+
+    def _apply_root_locus_gain(self, gain):
+        if not np.isfinite(gain) or gain < 0:
+            return
+
+        parameter_name = self.root_locus_gain_parameter_var.get().strip()
+        params_code = self.params_text.get("1.0", tk.END).rstrip("\n")
+
+        if not parameter_name:
+            parameter_name = "K_WOK"
+            system_expr = self.system_text.get("1.0", tk.END).strip()
+            if not system_expr:
+                return
+            self.system_text.delete("1.0", tk.END)
+            self.system_text.insert("1.0", f"{parameter_name} * ({system_expr})")
+
+        value_text = f"{gain:.12g}"
+        updated_params = self._replace_parameter_assignment(
+            params_code,
+            parameter_name,
+            value_text,
+        )
+        self.params_text.delete("1.0", tk.END)
+        self.params_text.insert("1.0", updated_params)
+        self.root_locus_gain_parameter_var.set(parameter_name)
+        self.root_locus_marker_gain_var.set(value_text)
+        self.status_var.set(f"WOK: {parameter_name} = {value_text} ausgewaehlt.")
+        self.after_idle(self.update_plots)
+
+    def _commit_root_locus_marker_entry(self, _event=None):
+        try:
+            env = self._base_eval_environment()
+            params_code = self.params_text.get("1.0", tk.END).strip()
+            if params_code:
+                exec(params_code, env, env)
+            gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
+        except Exception:
+            return
+        self._apply_root_locus_gain(gain)
+
+    def _on_root_locus_click(self, event):
+        click_data = self._root_locus_click_data
+        if (
+            click_data is None
+            or event.button != 1
+            or event.inaxes is not self.ax_root_locus
+            or event.x is None
+            or event.y is None
+        ):
+            return
+
+        toolbar = getattr(event.canvas, "toolbar", None)
+        if toolbar is not None and getattr(toolbar, "mode", ""):
+            return
+
+        loci = click_data["loci"]
+        gains = click_data["gains"]
+        click = np.array([event.x, event.y], dtype=float)
+        best_distance = float("inf")
+        best_gain = None
+
+        for branch in range(loci.shape[1]):
+            points = np.asarray(loci[:, branch], dtype=complex)
+            finite = np.isfinite(points.real) & np.isfinite(points.imag)
+            points = points[finite]
+            branch_gains = gains[finite]
+            if points.size < 2:
+                continue
+
+            display_points = self.ax_root_locus.transData.transform(
+                np.column_stack((points.real, points.imag))
+            )
+            starts = display_points[:-1]
+            vectors = display_points[1:] - starts
+            lengths_squared = np.sum(vectors * vectors, axis=1)
+            valid = lengths_squared > np.finfo(float).eps
+            if not np.any(valid):
+                continue
+
+            projections = np.zeros(len(vectors), dtype=float)
+            projections[valid] = np.clip(
+                np.sum((click - starts[valid]) * vectors[valid], axis=1)
+                / lengths_squared[valid],
+                0.0,
+                1.0,
+            )
+            nearest = starts + projections[:, None] * vectors
+            distances = np.linalg.norm(nearest - click, axis=1)
+            segment = int(np.argmin(distances))
+            if distances[segment] >= best_distance:
+                continue
+
+            fraction = projections[segment]
+            gain_start = float(branch_gains[segment])
+            gain_end = float(branch_gains[segment + 1])
+            if gain_start > 0 and gain_end > 0:
+                selected_gain = float(np.exp(
+                    np.log(gain_start)
+                    + fraction * (np.log(gain_end) - np.log(gain_start))
+                ))
+            else:
+                selected_gain = gain_start + fraction * (gain_end - gain_start)
+            best_distance = float(distances[segment])
+            best_gain = selected_gain
+
+        if best_gain is not None and best_distance <= 14.0:
+            self._apply_root_locus_gain(best_gain)
 
     @staticmethod
     def _documents_directory():
@@ -1303,11 +1435,9 @@ class ControlExplorerApp(tk.Tk):
 
     def _bind_events(self):
         for variable in self._settings_variables().values():
+            if variable is self.root_locus_marker_gain_var:
+                continue
             variable.trace_add("write", lambda *_: self._on_setting_changed())
-        self.root_locus_show_closed_poles_var.trace_add(
-            "write",
-            lambda *_: self._update_root_locus_marker_controls(),
-        )
 
         self.delay_var.trace_add("write", lambda *_: self.schedule_update())
 
@@ -1361,6 +1491,79 @@ class ControlExplorerApp(tk.Tk):
         }
         return env
 
+    @staticmethod
+    def _assigned_parameter_names(params_code):
+        if not params_code.strip():
+            return []
+        tree = ast.parse(params_code, mode="exec")
+        names = []
+        for node in tree.body:
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in names:
+                    names.append(target.id)
+        return names
+
+    def _is_multiplicative_gain_parameter(self, system_expr, env, parameter_name):
+        try:
+            systems = []
+            for value in (1.0, 2.0):
+                test_env = dict(env)
+                test_env[parameter_name] = value
+                systems.append(self._ensure_lti(eval(system_expr, test_env, test_env)))
+
+            frequencies = (0.731, 1.937, 4.123)
+            response_one = np.asarray([complex(np.squeeze(systems[0](1j * w))) for w in frequencies])
+            response_two = np.asarray([complex(np.squeeze(systems[1](1j * w))) for w in frequencies])
+            finite = np.isfinite(response_one) & np.isfinite(response_two)
+            return bool(
+                np.any(finite)
+                and np.allclose(
+                    response_two[finite],
+                    2.0 * response_one[finite],
+                    rtol=1e-7,
+                    atol=1e-9,
+                )
+            )
+        except Exception:
+            return False
+
+    def _root_locus_gain_candidates(self, params_code, system_expr, env):
+        try:
+            expression_names = {
+                node.id
+                for node in ast.walk(ast.parse(system_expr, mode="eval"))
+                if isinstance(node, ast.Name)
+            }
+            assigned_names = self._assigned_parameter_names(params_code)
+        except (SyntaxError, ValueError):
+            return []
+
+        candidates = []
+        for name in assigned_names:
+            if name not in expression_names or not isinstance(env.get(name), (int, float, np.number)):
+                continue
+            if self._is_multiplicative_gain_parameter(system_expr, env, name):
+                candidates.append(name)
+
+        def priority(name):
+            lowered = name.lower()
+            preferred = lowered == "k" or lowered.startswith("k_") or lowered.startswith("k") or "gain" in lowered
+            return (not preferred, assigned_names.index(name))
+
+        return sorted(candidates, key=priority)
+
+    def _update_root_locus_gain_parameter_controls(self, candidates, selected):
+        combo = getattr(self, "root_locus_gain_parameter_combo", None)
+        if combo is not None:
+            combo.configure(values=candidates)
+        if self.root_locus_gain_parameter_var.get() != selected:
+            self.root_locus_gain_parameter_var.set(selected)
+
     def _parse_user_input(self):
         env = self._base_eval_environment()
 
@@ -1377,6 +1580,19 @@ class ControlExplorerApp(tk.Tk):
         sys_rational = eval(system_expr, env, env)
         sys_rational = self._ensure_lti(sys_rational)
 
+        gain_candidates = self._root_locus_gain_candidates(params_code, system_expr, env)
+        selected_gain_parameter = self.root_locus_gain_parameter_var.get()
+        if selected_gain_parameter not in gain_candidates:
+            selected_gain_parameter = gain_candidates[0] if gain_candidates else ""
+
+        root_locus_sys_rational = sys_rational
+        if selected_gain_parameter:
+            root_locus_env = dict(env)
+            root_locus_env[selected_gain_parameter] = 1.0
+            root_locus_sys_rational = self._ensure_lti(
+                eval(system_expr, root_locus_env, root_locus_env)
+            )
+
         delay = float(eval(delay_expr, env, env))
         if delay < 0:
             raise ValueError("Die Totzeit muss >= 0 sein.")
@@ -1390,8 +1606,9 @@ class ControlExplorerApp(tk.Tk):
         root_locus_gain_min = float(eval(self.root_locus_gain_min_var.get(), env, env))
         root_locus_gain_max = float(eval(self.root_locus_gain_max_var.get(), env, env))
         root_locus_points = int(float(eval(self.root_locus_points_var.get(), env, env)))
-        root_locus_marker_gain = None
-        if self.root_locus_show_closed_poles_var.get():
+        if selected_gain_parameter:
+            root_locus_marker_gain = float(env[selected_gain_parameter])
+        else:
             root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
@@ -1408,19 +1625,14 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Unbekannte Bode-Frequenzeinheit.")
         if bode_frequency_min <= 0 or bode_frequency_max <= bode_frequency_min:
             raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
-        gain_values = [root_locus_gain_min, root_locus_gain_max]
-        if root_locus_marker_gain is not None:
-            gain_values.append(root_locus_marker_gain)
+        gain_values = [root_locus_gain_min, root_locus_gain_max, root_locus_marker_gain]
         if not np.all(np.isfinite(gain_values)):
             raise ValueError("Die Verstaerkungswerte der Wurzelortskurve muessen endlich sein.")
         if root_locus_gain_min < 0 or root_locus_gain_max <= root_locus_gain_min:
             raise ValueError("Fuer die Wurzelortskurve muss 0 <= K min < K max gelten.")
         if root_locus_points < 10:
             raise ValueError("Die Wurzelortskurve benoetigt mindestens 10 Verstaerkungspunkte.")
-        if (
-            root_locus_marker_gain is not None
-            and not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max
-        ):
+        if not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max:
             raise ValueError("Der markierte Wert K muss zwischen K min und K max liegen.")
         if t_max <= 0:
             raise ValueError("t_max muss > 0 sein.")
@@ -1454,8 +1666,7 @@ class ControlExplorerApp(tk.Tk):
                 root_locus_gain_max,
                 root_locus_points,
             )
-        if root_locus_marker_gain is not None:
-            root_locus_gains = np.unique(np.append(root_locus_gains, root_locus_marker_gain))
+        root_locus_gains = np.unique(np.append(root_locus_gains, root_locus_marker_gain))
         t = np.linspace(0.0, t_max, t_points)
 
         markers = self._parse_marker_frequencies(env)
@@ -1465,6 +1676,9 @@ class ControlExplorerApp(tk.Tk):
             "params_code": params_code,
             "system_expr": system_expr,
             "sys_rational": sys_rational,
+            "root_locus_sys_rational": root_locus_sys_rational,
+            "root_locus_gain_candidates": gain_candidates,
+            "root_locus_gain_parameter": selected_gain_parameter,
             "delay": delay,
             "omega": omega,
             "bode_omega": bode_omega,
@@ -1776,7 +1990,7 @@ class ControlExplorerApp(tk.Tk):
         self._control_warnings = []
         try:
             data = self._parse_user_input()
-            sys_for_tool = data["sys_rational"]
+            sys_for_tool = data["root_locus_sys_rational"]
 
             if data["delay"] > 0:
                 if data["pade_order"] <= 0:
@@ -1858,6 +2072,13 @@ class ControlExplorerApp(tk.Tk):
 
         try:
             data = self._parse_user_input()
+            self._update_root_locus_gain_parameter_controls(
+                data["root_locus_gain_candidates"],
+                data["root_locus_gain_parameter"],
+            )
+            marker_text = f"{data['root_locus_marker_gain']:.12g}"
+            if self.root_locus_marker_gain_var.get() != marker_text:
+                self.root_locus_marker_gain_var.set(marker_text)
             self._update_latex_preview(data)
             active_tab = self.notebook.index(self.notebook.select())
 
@@ -1891,7 +2112,7 @@ class ControlExplorerApp(tk.Tk):
 
             if active_tab == 2:
                 sys_root_locus = self._root_locus_system(
-                    data["sys_rational"],
+                    data["root_locus_sys_rational"],
                     data["delay"],
                     data["pade_order"],
                 )
@@ -2647,6 +2868,7 @@ class ControlExplorerApp(tk.Tk):
     def _plot_root_locus(self, sys_root_locus, gains, marker_gain):
         ax = self.ax_root_locus
         ax.clear()
+        self._root_locus_click_data = None
         self._hover_data.pop(ax, None)
         self._hover_annotations.pop(ax, None)
 
@@ -2662,6 +2884,10 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Die Wurzelortskurve konnte nicht als zweidimensionales Polraster berechnet werden.")
         if loci.shape[1] == 0:
             raise ValueError("Fuer eine Wurzelortskurve muss der offene Kreis mindestens einen Pol besitzen.")
+        self._root_locus_click_data = {
+            "loci": loci,
+            "gains": locus_gains,
+        }
 
         for branch in range(loci.shape[1]):
             branch_values = loci[:, branch]
@@ -2710,31 +2936,28 @@ class ControlExplorerApp(tk.Tk):
                 label="Offene Nullstellen",
             )
 
-        marker_poles = np.array([], dtype=complex)
-        show_closed_poles = self.root_locus_show_closed_poles_var.get() and marker_gain is not None
-        if show_closed_poles:
-            marker_index = int(np.argmin(np.abs(locus_gains - marker_gain)))
-            marker_poles = loci[marker_index]
-            finite_marker = np.isfinite(marker_poles.real) & np.isfinite(marker_poles.imag)
-            marker_poles = marker_poles[finite_marker]
-            if marker_poles.size:
-                marker_pole_groups = self._group_pole_multiplicities(marker_poles)
-                unique_marker_poles = np.asarray([pole for pole, _multiplicity in marker_pole_groups])
-                ax.plot(
-                    unique_marker_poles.real,
-                    unique_marker_poles.imag,
-                    linestyle="none",
-                    marker="D",
-                    color="#ff7f0e",
-                    markersize=6,
-                    label=rf"Geschlossene Pole bei $K={marker_gain:.4g}$",
-                )
-                self._annotate_pole_multiplicities(
-                    ax,
-                    marker_pole_groups,
-                    color="#ff7f0e",
-                    offset=(7, -14),
-                )
+        marker_index = int(np.argmin(np.abs(locus_gains - marker_gain)))
+        marker_poles = loci[marker_index]
+        finite_marker = np.isfinite(marker_poles.real) & np.isfinite(marker_poles.imag)
+        marker_poles = marker_poles[finite_marker]
+        if marker_poles.size:
+            marker_pole_groups = self._group_pole_multiplicities(marker_poles)
+            unique_marker_poles = np.asarray([pole for pole, _multiplicity in marker_pole_groups])
+            ax.plot(
+                unique_marker_poles.real,
+                unique_marker_poles.imag,
+                linestyle="none",
+                marker="D",
+                color="#ff7f0e",
+                markersize=6,
+                label=rf"Geschlossene Pole bei $K={marker_gain:.4g}$",
+            )
+            self._annotate_pole_multiplicities(
+                ax,
+                marker_pole_groups,
+                color="#ff7f0e",
+                offset=(7, -14),
+            )
 
         ax.axvline(0.0, color="black", linewidth=1.0, linestyle="--", label="Stabilitaetsgrenze")
         ax.axhline(0.0, color="#555555", linewidth=0.8)
@@ -2753,14 +2976,13 @@ class ControlExplorerApp(tk.Tk):
             ax.set_aspect("auto")
 
         stability_lines = []
-        if show_closed_poles:
-            if marker_poles.size and np.all(marker_poles.real < -1e-9):
-                marker_status = "asymptotisch stabil"
-            elif marker_poles.size and np.all(marker_poles.real <= 1e-9):
-                marker_status = "grenzstabil im numerischen Raster"
-            else:
-                marker_status = "instabil"
-            stability_lines.append(f"K = {marker_gain:.5g}: {marker_status}")
+        if marker_poles.size and np.all(marker_poles.real < -1e-9):
+            marker_status = "asymptotisch stabil"
+        elif marker_poles.size and np.all(marker_poles.real <= 1e-9):
+            marker_status = "grenzstabil im numerischen Raster"
+        else:
+            marker_status = "instabil"
+        stability_lines.append(f"K = {marker_gain:.5g}: {marker_status}")
         stability_lines.append(self._sampled_stable_gain_text(locus_gains, loci))
         if self.root_locus_equal_axis_var.get() and not use_equal_axis:
             stability_lines.append(
@@ -3012,12 +3234,14 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(f"Nyquist-System: {self.nyquist_plot_system_var.get()}")
         text_lines.append(f"Bode-System: {self.bode_plot_system_var.get()}")
         text_lines.append(f"Sprungantwort-System: {self.step_plot_system_var.get()}")
+        root_locus_label = "Wurzelortskurve"
+        if data["root_locus_gain_parameter"]:
+            root_locus_label += f" (Gain-Parameter {data['root_locus_gain_parameter']})"
         root_locus_info = (
-            "Wurzelortskurve: "
+            root_locus_label + ": "
             f"K = {data['root_locus_gains'][0]:.6g} bis {data['root_locus_gains'][-1]:.6g}"
         )
-        if data["root_locus_marker_gain"] is not None:
-            root_locus_info += f", geschlossene Pole markiert bei K = {data['root_locus_marker_gain']:.6g}"
+        root_locus_info += f", geschlossene Pole markiert bei K = {data['root_locus_marker_gain']:.6g}"
         text_lines.append(root_locus_info)
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
         text_lines.append(f"Sprungfaktor: {data['step_amplitude']:.8g}")
