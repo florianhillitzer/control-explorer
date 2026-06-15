@@ -2128,6 +2128,8 @@ class ControlExplorerApp(tk.Tk):
                     sys_root_locus,
                     data["root_locus_gains"],
                     data["root_locus_marker_gain"],
+                    data["delay"],
+                    data["pade_order"],
                 )
             elif active_tab == 3:
                 self._plot_step(sys_time, data["t"], data["step_amplitude"])
@@ -2865,7 +2867,35 @@ class ControlExplorerApp(tk.Tk):
                 annotation_clip=False,
             )
 
-    def _plot_root_locus(self, sys_root_locus, gains, marker_gain):
+    def _root_locus_delay_note(self, delay, pade_order):
+        if delay <= 0:
+            return (
+                "WOK-Modell: keine Totzeit vorhanden.",
+                "#eef5ff",
+                "#5b7fa3",
+            )
+        if not self.root_locus_include_delay_var.get():
+            return (
+                f"ACHTUNG: Totzeit T_t = {delay:.5g} s ist vorhanden, wird in der WOK "
+                "aber nicht beruecksichtigt. Aktivierung unter Einstellungen > Wurzelortskurve.",
+                "#ffe5e5",
+                "#b22222",
+            )
+        if pade_order <= 0:
+            return (
+                f"ACHTUNG: Totzeit T_t = {delay:.5g} s ist vorhanden, kann bei Pade-Ordnung 0 "
+                "aber nicht in der WOK beruecksichtigt werden.",
+                "#ffe5e5",
+                "#b22222",
+            )
+        return (
+            f"WOK-Modell: Totzeit T_t = {delay:.5g} s wird mit Pade-Approximation "
+            f"der Ordnung {pade_order} beruecksichtigt.",
+            "#fff4cc",
+            "#9a6700",
+        )
+
+    def _plot_root_locus(self, sys_root_locus, gains, marker_gain, delay=0.0, pade_order=0):
         ax = self.ax_root_locus
         ax.clear()
         self._root_locus_click_data = None
@@ -2974,6 +3004,28 @@ class ControlExplorerApp(tk.Tk):
             ax.set_aspect("equal", adjustable="box")
         else:
             ax.set_aspect("auto")
+
+        delay_note, delay_note_background, delay_note_border = self._root_locus_delay_note(
+            delay,
+            pade_order,
+        )
+        ax.text(
+            0.02,
+            0.98,
+            delay_note,
+            transform=ax.transAxes,
+            fontsize=8.5,
+            va="top",
+            ha="left",
+            wrap=True,
+            bbox={
+                "boxstyle": "round,pad=0.4",
+                "fc": delay_note_background,
+                "ec": delay_note_border,
+                "alpha": 0.95,
+            },
+            zorder=8,
+        )
 
         stability_lines = []
         if marker_poles.size and np.all(marker_poles.real < -1e-9):
