@@ -33,6 +33,7 @@ MANIFEST
 *.spec
 !control_explorer.spec
 .venv-build/
+.venv-build-linux/
 
 # Installer logs
 pip-log.txt
