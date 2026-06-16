@@ -15,6 +15,7 @@ import warnings
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -74,6 +75,10 @@ class ControlExplorerApp(tk.Tk):
         "step_amplitude": "1",
         "disturbance_amplitude": "2",
         "disturbance_time": "5",
+        "disturbance_end_time": "",
+        "disturbance_settling_tolerance": "2",
+        "disturbance_show_reference_component": True,
+        "disturbance_show_disturbance_component": True,
         "pade_order": "6",
         "marker_omega": "0, 1",
         "nyquist_plot_system": SYSTEM_OPEN,
@@ -93,7 +98,7 @@ class ControlExplorerApp(tk.Tk):
         super().__init__()
         self._native_icon_handles = []
 
-        self.title("Control Explorer - Nyquist, Bode, Wurzelortskurve, Sprungantwort")
+        self.title("Control Explorer - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung")
         self._set_window_icon()
         self.geometry("1300x820")
         self.minsize(1050, 650)
@@ -259,6 +264,14 @@ class ControlExplorerApp(tk.Tk):
         self.step_amplitude_var = tk.StringVar(value=defaults["step_amplitude"])
         self.disturbance_amplitude_var = tk.StringVar(value=defaults["disturbance_amplitude"])
         self.disturbance_time_var = tk.StringVar(value=defaults["disturbance_time"])
+        self.disturbance_end_time_var = tk.StringVar(value=defaults["disturbance_end_time"])
+        self.disturbance_settling_tolerance_var = tk.StringVar(value=defaults["disturbance_settling_tolerance"])
+        self.disturbance_show_reference_component_var = tk.BooleanVar(
+            value=defaults["disturbance_show_reference_component"]
+        )
+        self.disturbance_show_disturbance_component_var = tk.BooleanVar(
+            value=defaults["disturbance_show_disturbance_component"]
+        )
 
         self.pade_order_var = tk.StringVar(value=defaults["pade_order"])
         self.marker_omega_var = tk.StringVar(value=defaults["marker_omega"])
@@ -300,6 +313,10 @@ class ControlExplorerApp(tk.Tk):
             "step_amplitude": self.step_amplitude_var,
             "disturbance_amplitude": self.disturbance_amplitude_var,
             "disturbance_time": self.disturbance_time_var,
+            "disturbance_end_time": self.disturbance_end_time_var,
+            "disturbance_settling_tolerance": self.disturbance_settling_tolerance_var,
+            "disturbance_show_reference_component": self.disturbance_show_reference_component_var,
+            "disturbance_show_disturbance_component": self.disturbance_show_disturbance_component_var,
             "pade_order": self.pade_order_var,
             "marker_omega": self.marker_omega_var,
             "nyquist_plot_system": self.nyquist_plot_system_var,
@@ -317,7 +334,27 @@ class ControlExplorerApp(tk.Tk):
     def _settings_snapshot(self):
         return {key: variable.get() for key, variable in self._settings_variables().items()}
 
+    def _normalize_system_selection(self, selected):
+        legacy_system_labels = {
+            r"Offener Kreis G_0(s)": self.SYSTEM_OPEN,
+            r"Offener Kreis G₀(s)": self.SYSTEM_OPEN,
+            r"Geschlossener Kreis G(s)": self.SYSTEM_CLOSED,
+        }
+        return legacy_system_labels.get(selected, selected)
+
+    def _normalize_settings(self, settings):
+        normalized = dict(settings)
+        valid_system_labels = {self.SYSTEM_OPEN, self.SYSTEM_CLOSED, self.SYSTEM_SENS}
+        for key in ("nyquist_plot_system", "bode_plot_system", "step_plot_system"):
+            value = self._normalize_system_selection(normalized.get(key))
+            if value is not None and value not in valid_system_labels:
+                normalized[key] = self.DEFAULT_SETTINGS[key]
+            elif value is not None:
+                normalized[key] = value
+        return normalized
+
     def _apply_settings(self, settings):
+        settings = self._normalize_settings(settings)
         self._loading_settings = True
         try:
             for key, variable in self._settings_variables().items():
@@ -414,21 +451,24 @@ class ControlExplorerApp(tk.Tk):
         tab_freq = ttk.Frame(notebook, padding=10)
         tab_root_locus = ttk.Frame(notebook, padding=10)
         tab_step = ttk.Frame(notebook, padding=10)
+        tab_disturbance = ttk.Frame(notebook, padding=10)
         tab_nyquist = ttk.Frame(notebook, padding=10)
 
         notebook.add(tab_general, text="Allgemein")
         notebook.add(tab_freq, text="Frequenz")
         notebook.add(tab_root_locus, text="Wurzelortskurve")
         notebook.add(tab_step, text="Sprung")
+        notebook.add(tab_disturbance, text="Stoerung")
         notebook.add(tab_nyquist, text="Ortskurve")
 
-        for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_nyquist):
+        for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_nyquist):
             tab.columnconfigure(0, weight=1)
 
         self._create_general_settings(tab_general)
         self._create_frequency_settings(tab_freq)
         self._create_root_locus_settings(tab_root_locus)
         self._create_step_settings(tab_step)
+        self._create_disturbance_settings(tab_disturbance)
         self._create_nyquist_settings(tab_nyquist)
 
         button_frame = ttk.Frame(dialog)
@@ -514,6 +554,43 @@ class ControlExplorerApp(tk.Tk):
             justify="left",
             foreground="#555555",
         ).grid(row=4, column=0, sticky="w", padx=6, pady=(10, 0))
+
+    def _create_disturbance_settings(self, parent):
+        signal_box = ttk.LabelFrame(parent, text="Stoersignal")
+        signal_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        signal_box.columnconfigure(0, weight=1)
+        self._add_entry(signal_box, "Amplitude d0 [V]", self.disturbance_amplitude_var, 0, 0)
+        self._add_entry(signal_box, "Startzeit t_d [s]", self.disturbance_time_var, 1, 0)
+        self._add_entry(signal_box, "Endzeit t_e [s]", self.disturbance_end_time_var, 2, 0)
+        self._add_entry(signal_box, "Ausregel-Toleranz [%]", self.disturbance_settling_tolerance_var, 3, 0)
+
+        display_box = ttk.LabelFrame(parent, text="Darstellung")
+        display_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        display_box.columnconfigure(0, weight=1)
+        ttk.Checkbutton(
+            display_box,
+            text="Fuehrungsanteil y_w(t) anzeigen",
+            variable=self.disturbance_show_reference_component_var,
+            command=self.schedule_update,
+        ).grid(row=0, column=0, sticky="w", padx=6, pady=3)
+        ttk.Checkbutton(
+            display_box,
+            text="Stoeranteil y_d(t) anzeigen",
+            variable=self.disturbance_show_disturbance_component_var,
+            command=self.schedule_update,
+        ).grid(row=1, column=0, sticky="w", padx=6, pady=3)
+
+        ttk.Label(
+            parent,
+            text=(
+                "Die Stoerung greift additiv am Streckeneingang an. "
+                "Der Fuehrungssprung w(t) nutzt den Sprungfaktor A aus dem Reiter Sprung. "
+                "Leere Endzeit bedeutet: Stoerung bleibt bis zum Simulationsende aktiv."
+            ),
+            wraplength=460,
+            justify="left",
+            foreground="#555555",
+        ).grid(row=2, column=0, sticky="w", padx=6)
 
     def _create_root_locus_settings(self, parent):
         gain_box = ttk.LabelFrame(parent, text="Zusatzverstaerkung K")
@@ -634,7 +711,7 @@ class ControlExplorerApp(tk.Tk):
         block_frame = ttk.LabelFrame(parent, text="Standardregelkreis")
         block_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         block_frame.columnconfigure(0, weight=1)
-        self.fig_block = Figure(figsize=(4.8, 1.25), dpi=100)
+        self.fig_block = Figure(figsize=(4.8, 1.65), dpi=100)
         self.ax_block = self.fig_block.add_subplot(111)
         self.ax_block.axis("off")
         self.canvas_block = FigureCanvasTkAgg(self.fig_block, master=block_frame)
@@ -820,23 +897,17 @@ class ControlExplorerApp(tk.Tk):
 
         disturbance_options = ttk.Frame(self.tab_disturbance, padding=(0, 0, 0, 4))
         disturbance_options.pack(side=tk.TOP, fill=tk.X)
-        ttk.Label(disturbance_options, text="d(t) Amplitude [V]:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(
+        self.disturbance_summary_label = ttk.Label(
             disturbance_options,
-            textvariable=self.disturbance_amplitude_var,
-            width=10,
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(disturbance_options, text="Störung ab t [s]:").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(
-            disturbance_options,
-            textvariable=self.disturbance_time_var,
-            width=10,
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(
-            disturbance_options,
-            text="Störung greift additiv am Streckeneingang u(t) ein",
+            text="Stoerung additiv am Streckeneingang; Parameter unter Einstellungen > Stoerung.",
             foreground="#555555",
-        ).pack(side=tk.LEFT)
+        )
+        self.disturbance_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(
+            disturbance_options,
+            text="Stoerung einstellen...",
+            command=self._open_settings_window,
+        ).pack(side=tk.RIGHT)
 
         self.fig_nyquist = Figure(figsize=(7, 6), dpi=100)
         self.ax_nyquist = self.fig_nyquist.add_subplot(111)
@@ -1299,60 +1370,108 @@ class ControlExplorerApp(tk.Tk):
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
 
-        def block(x, y, text, active=True):
-            face = "#ffffff" if active else "#eeeeee"
-            edge = "#444444" if active else "#999999"
-            ax.text(
-                x,
-                y,
-                text,
-                ha="center",
-                va="center",
-                fontsize=9,
-                bbox={"boxstyle": "round,pad=0.35", "fc": face, "ec": edge},
-            )
+        signal_color = "#333333"
+        muted_color = "#8a8a8a"
+        block_edge = "#444444"
+        block_inactive = "#f0f0f0"
 
-        def arrow(start, end, text=None):
-            ax.annotate(
-                "",
-                xy=end,
-                xytext=start,
-                arrowprops={"arrowstyle": "->", "linewidth": 1.2, "color": "#333333"},
+        def add_arrow(start, end, text=None, text_offset=(0.0, 0.045), color=signal_color, lw=1.2):
+            arrow = FancyArrowPatch(
+                start,
+                end,
+                arrowstyle="->",
+                mutation_scale=9,
+                linewidth=lw,
+                color=color,
+                shrinkA=0,
+                shrinkB=0,
             )
+            ax.add_patch(arrow)
             if text:
                 ax.text(
-                    0.5 * (start[0] + end[0]),
-                    0.5 * (start[1] + end[1]) + 0.06,
+                    0.5 * (start[0] + end[0]) + text_offset[0],
+                    0.5 * (start[1] + end[1]) + text_offset[1],
                     text,
                     ha="center",
                     va="bottom",
                     fontsize=8,
+                    color=color,
                 )
 
-        block(0.18, 0.62, "V(s)" if data["prefilter_enabled"] else "V=1", data["prefilter_enabled"])
-        block(0.43, 0.62, "K(s)" if data["controller_enabled"] else "K=1", data["controller_enabled"])
-        block(0.72, 0.62, "G(s)", True)
-        ax.text(0.31, 0.62, "Σ", ha="center", va="center", fontsize=12, bbox={"boxstyle": "circle", "fc": "white", "ec": "#444444"})
-        ax.text(0.58, 0.62, "Σ", ha="center", va="center", fontsize=12, bbox={"boxstyle": "circle", "fc": "white", "ec": "#444444"})
+        def add_block(center, text, active=True, width=0.12, height=0.16):
+            x = center[0] - width / 2
+            y = center[1] - height / 2
+            face = "#ffffff" if active else block_inactive
+            edge = block_edge if active else muted_color
+            rect = Rectangle(
+                (x, y),
+                width,
+                height,
+                facecolor=face,
+                edgecolor=edge,
+                linewidth=1.1,
+                joinstyle="round",
+            )
+            ax.add_patch(rect)
+            ax.text(center[0], center[1], text, ha="center", va="center", fontsize=8.8, color=edge)
 
-        arrow((0.03, 0.62), (0.13, 0.62), "w")
-        arrow((0.23, 0.62), (0.28, 0.62))
-        arrow((0.34, 0.62), (0.38, 0.62), "e")
-        arrow((0.48, 0.62), (0.55, 0.62), "u_R")
-        arrow((0.61, 0.62), (0.67, 0.62), "u")
-        arrow((0.77, 0.62), (0.96, 0.62), "y")
-        arrow((0.58, 0.93), (0.58, 0.68), "d")
+        def add_sum(center):
+            circle = Circle(center, 0.055, facecolor="#ffffff", edgecolor=block_edge, linewidth=1.1)
+            ax.add_patch(circle)
+            ax.plot(
+                [center[0] - 0.032, center[0] + 0.032],
+                [center[1] + 0.032, center[1] - 0.032],
+                color=muted_color,
+                linewidth=0.75,
+            )
+            ax.plot(
+                [center[0] - 0.032, center[0] + 0.032],
+                [center[1] - 0.032, center[1] + 0.032],
+                color=muted_color,
+                linewidth=0.75,
+            )
 
-        ax.plot([0.90, 0.90, 0.31], [0.62, 0.25, 0.25], color="#555555", linewidth=1.1)
-        ax.annotate(
-            "",
-            xy=(0.31, 0.57),
-            xytext=(0.31, 0.25),
-            arrowprops={"arrowstyle": "->", "linewidth": 1.1, "color": "#555555"},
+        y_main = 0.63
+        y_feedback = 0.25
+        x_v = 0.19
+        x_sum_e = 0.34
+        x_k = 0.48
+        x_sum_d = 0.64
+        x_g = 0.79
+        x_out = 0.96
+
+        add_block((x_v, y_main), "V(s)" if data["prefilter_enabled"] else "V=1", data["prefilter_enabled"])
+        add_sum((x_sum_e, y_main))
+        add_block((x_k, y_main), "K(s)" if data["controller_enabled"] else "K=1", data["controller_enabled"])
+        add_sum((x_sum_d, y_main))
+        add_block((x_g, y_main), "G(s)", True)
+
+        add_arrow((0.04, y_main), (x_v - 0.07, y_main), "w")
+        add_arrow((x_v + 0.06, y_main), (x_sum_e - 0.06, y_main))
+        add_arrow((x_sum_e + 0.055, y_main), (x_k - 0.06, y_main), "e")
+        add_arrow((x_k + 0.06, y_main), (x_sum_d - 0.055, y_main), "u_R")
+        add_arrow((x_sum_d + 0.055, y_main), (x_g - 0.06, y_main), "u")
+        add_arrow((x_g + 0.06, y_main), (x_out, y_main), "y")
+        add_arrow((x_sum_d, 0.93), (x_sum_d, y_main + 0.058), "d", text_offset=(0.025, -0.005))
+
+        ax.plot([0.90, 0.90, x_sum_e], [y_main, y_feedback, y_feedback], color=muted_color, linewidth=1.1)
+        add_arrow((x_sum_e, y_feedback), (x_sum_e, y_main - 0.058), color=muted_color, lw=1.1)
+        ax.text(x_sum_e - 0.035, y_main - 0.085, "-", ha="center", va="center", fontsize=11, color=muted_color)
+        ax.text(x_sum_e - 0.035, y_main + 0.07, "+", ha="center", va="center", fontsize=9, color=muted_color)
+        ax.text(x_sum_d - 0.04, y_main + 0.07, "+", ha="center", va="center", fontsize=9, color=muted_color)
+        ax.text(x_sum_d - 0.035, y_main - 0.075, "+", ha="center", va="center", fontsize=9, color=muted_color)
+
+        ax.text(
+            0.02,
+            0.05,
+            "Einheitsrueckfuehrung, Stoerung additiv am Streckeneingang",
+            ha="left",
+            va="bottom",
+            fontsize=7.5,
+            color="#666666",
         )
-        ax.text(0.29, 0.52, "−", ha="right", va="center", fontsize=11)
 
-        self.fig_block.tight_layout(pad=0.1)
+        self.fig_block.subplots_adjust(left=0.02, right=0.98, bottom=0.04, top=0.98)
         self.canvas_block.draw_idle()
 
     def _position_hover_annotation(self, ax, annotation, x_value, y_value):
@@ -1769,6 +1888,11 @@ class ControlExplorerApp(tk.Tk):
         step_amplitude = float(eval(self.step_amplitude_var.get(), env, env))
         disturbance_amplitude = float(eval(self.disturbance_amplitude_var.get(), env, env))
         disturbance_time = float(eval(self.disturbance_time_var.get(), env, env))
+        disturbance_end_time_expr = self.disturbance_end_time_var.get().strip()
+        disturbance_end_time = None
+        if disturbance_end_time_expr:
+            disturbance_end_time = float(eval(disturbance_end_time_expr, env, env))
+        disturbance_settling_tolerance = float(eval(self.disturbance_settling_tolerance_var.get(), env, env))
 
         pade_order = int(float(eval(self.pade_order_var.get(), env, env)))
 
@@ -1799,6 +1923,13 @@ class ControlExplorerApp(tk.Tk):
             raise ValueError("Die Störamplitude muss eine endliche Zahl sein.")
         if disturbance_time < 0 or disturbance_time >= t_max:
             raise ValueError("Der Störzeitpunkt muss 0 <= t_d < t_max erfüllen.")
+        if disturbance_end_time is not None:
+            if not np.isfinite(disturbance_end_time):
+                raise ValueError("Das Störende muss eine endliche Zahl sein.")
+            if disturbance_end_time <= disturbance_time or disturbance_end_time > t_max:
+                raise ValueError("Das Störende muss t_d < t_e <= t_max erfuellen.")
+        if not np.isfinite(disturbance_settling_tolerance) or disturbance_settling_tolerance <= 0:
+            raise ValueError("Die Ausregel-Toleranz der Störung muss eine positive endliche Prozentzahl sein.")
         if pade_order < 0:
             raise ValueError("Die Padé-Ordnung muss >= 0 sein.")
 
@@ -1857,6 +1988,10 @@ class ControlExplorerApp(tk.Tk):
             "step_amplitude": step_amplitude,
             "disturbance_amplitude": disturbance_amplitude,
             "disturbance_time": disturbance_time,
+            "disturbance_end_time": disturbance_end_time,
+            "disturbance_settling_tolerance": disturbance_settling_tolerance,
+            "disturbance_show_reference_component": self.disturbance_show_reference_component_var.get(),
+            "disturbance_show_disturbance_component": self.disturbance_show_disturbance_component_var.get(),
             "pade_order": pade_order,
             "markers": markers,
         }
@@ -1959,6 +2094,7 @@ class ControlExplorerApp(tk.Tk):
         return omega_out, response
 
     def _selected_frequency_system(self, L, selected, data=None, omega=None):
+        selected = self._normalize_system_selection(selected)
         if selected == self.SYSTEM_OPEN:
             return L
         if selected == self.SYSTEM_CLOSED:
@@ -1972,7 +2108,7 @@ class ControlExplorerApp(tk.Tk):
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
     def _is_open_loop_selection(self, selected):
-        return selected == self.SYSTEM_OPEN
+        return self._normalize_system_selection(selected) == self.SYSTEM_OPEN
 
     def _count_origin_integrators(self, sys_rational, tol=1e-10):
         """
@@ -2117,6 +2253,7 @@ class ControlExplorerApp(tk.Tk):
         return self._call_control("tf fuer Eins", ct.tf, [1], [1])
 
     def _time_domain_system_with_pade(self, data, selected):
+        selected = self._normalize_system_selection(selected)
         delay_tf = self._pade_delay_tf(data["delay"], data["pade_order"], label="pade")
         L_time = data["controller"] * data["plant"] * delay_tf
 
@@ -2872,7 +3009,7 @@ class ControlExplorerApp(tk.Tk):
         ax_phase.set_xlim(left=float(plot_frequency[0]), right=float(plot_frequency[-1]))
 
         if self.show_bode_margins_var.get():
-            if self.bode_plot_system_var.get() == self.SYSTEM_OPEN and L_open is not None:
+            if self._is_open_loop_selection(self.bode_plot_system_var.get()) and L_open is not None:
                 self._plot_bode_margins(ax_mag, ax_phase, omega, L_open, sys_rational)
             else:
                 ax_mag.text(
@@ -3328,6 +3465,8 @@ class ControlExplorerApp(tk.Tk):
         t = data["t"]
         w_signal = np.full_like(t, data["step_amplitude"], dtype=float)
         d_signal = np.where(t >= data["disturbance_time"], data["disturbance_amplitude"], 0.0)
+        if data["disturbance_end_time"] is not None:
+            d_signal = np.where(t >= data["disturbance_end_time"], 0.0, d_signal)
 
         y_w = self._forced_response_output("Stoerpfad Y/W", models["y_from_w"], t, w_signal)
         y_d = self._forced_response_output("Stoerpfad Y/D", models["y_from_d"], t, d_signal)
@@ -3340,16 +3479,24 @@ class ControlExplorerApp(tk.Tk):
         u_total = ur_w + u_disturbance
 
         ax_y.plot(t, y_total, linewidth=2, label=r"$y(t)$")
-        ax_y.plot(t, y_w, linestyle="--", linewidth=1.2, label=r"Führungsanteil")
+        if data["disturbance_show_reference_component"]:
+            ax_y.plot(t, y_w, linestyle="--", linewidth=1.2, label=r"Fuehrungsanteil $y_w$")
+        if data["disturbance_show_disturbance_component"]:
+            ax_y.plot(t, y_d, linestyle=":", linewidth=1.2, label=r"Stoeranteil $y_d$")
         ax_y.axvline(data["disturbance_time"], color="black", linestyle=":", linewidth=1.0, label=r"$t_d$")
+        if data["disturbance_end_time"] is not None:
+            ax_y.axvline(data["disturbance_end_time"], color="#666666", linestyle="--", linewidth=1.0, label=r"$t_e$")
         ax_y.set_ylabel(r"$y(t)$ [V]")
-        ax_y.set_title("Störaufschaltung am Streckeneingang")
+        ax_y.set_title("Stoeraufschaltung am Streckeneingang")
         ax_y.grid(self.grid_var.get(), which="both")
 
         final_value = float(y_total[-1])
         baseline_index = max(0, int(np.searchsorted(t, data["disturbance_time"]) - 1))
         baseline_value = float(y_total[baseline_index])
-        tolerance = max(0.02 * max(abs(baseline_value), abs(final_value), 1.0), 1e-6)
+        tolerance = max(
+            data["disturbance_settling_tolerance"] / 100.0 * max(abs(baseline_value), abs(final_value), 1.0),
+            1e-6,
+        )
         settling_time = self._settling_time_after_step(
             t,
             y_total,
@@ -3360,12 +3507,12 @@ class ControlExplorerApp(tk.Tk):
         if settling_time is None:
             settling_text = "Ausregelzeit: nicht im Simulationsfenster"
         else:
-            settling_text = f"Ausregelzeit nach Störung: {settling_time:.4g} s"
+            settling_text = f"Ausregelzeit nach Stoerung: {settling_time:.4g} s"
         steady_error = final_value - baseline_value
         ax_y.text(
             0.02,
             0.04,
-            settling_text + f"\nEndwertänderung y: {steady_error:.4g} V",
+            settling_text + f"\nEndwertaenderung y: {steady_error:.4g} V",
             transform=ax_y.transAxes,
             fontsize=8.5,
             va="bottom",
@@ -3374,9 +3521,11 @@ class ControlExplorerApp(tk.Tk):
         )
 
         ax_u.plot(t, ur_total, linewidth=1.8, label=r"Reglerausgang $u_R(t)$")
-        ax_u.plot(t, d_signal, linewidth=1.4, linestyle=":", label=r"Störung $d(t)$")
+        ax_u.plot(t, d_signal, linewidth=1.4, linestyle=":", label=r"Stoerung $d(t)$")
         ax_u.plot(t, u_total, linewidth=1.8, linestyle="--", label=r"Streckeneingang $u(t)$")
         ax_u.axvline(data["disturbance_time"], color="black", linestyle=":", linewidth=1.0)
+        if data["disturbance_end_time"] is not None:
+            ax_u.axvline(data["disturbance_end_time"], color="#666666", linestyle="--", linewidth=1.0)
         ax_u.set_xlabel(r"$t$ [s]")
         ax_u.set_ylabel("[V]")
         ax_u.grid(self.grid_var.get(), which="both")
@@ -3388,6 +3537,22 @@ class ControlExplorerApp(tk.Tk):
 
         self._register_hover(ax_y, "step", t, y_total, input_signal=w_signal + d_signal)
         self._register_hover(ax_u, "step", t, u_total, input_signal=d_signal)
+
+        if hasattr(self, "disturbance_summary_label"):
+            end_text = (
+                f"t_e = {data['disturbance_end_time']:.6g} s, "
+                if data["disturbance_end_time"] is not None
+                else "t_e = offen, "
+            )
+            self.disturbance_summary_label.configure(
+                text=(
+                    f"d0 = {data['disturbance_amplitude']:.6g} V, "
+                    + f"t_d = {data['disturbance_time']:.6g} s, "
+                    + end_text
+                    + f"Toleranz = {data['disturbance_settling_tolerance']:.6g} %, "
+                    + "additiv am Streckeneingang"
+                )
+            )
 
         self.fig_disturbance.tight_layout()
         self.canvas_disturbance.draw_idle()
@@ -3622,7 +3787,13 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(f"Sprungfaktor w(t): {data['step_amplitude']:.8g}")
         text_lines.append(
             f"Stoeraufschaltung: d(t) = {data['disturbance_amplitude']:.8g} ab "
-            f"t = {data['disturbance_time']:.8g} s am Streckeneingang"
+            + f"t = {data['disturbance_time']:.8g} s am Streckeneingang, "
+            + (
+                f"bis t = {data['disturbance_end_time']:.8g} s, "
+                if data["disturbance_end_time"] is not None
+                else "ohne Endzeit, "
+            )
+            + f"Toleranz {data['disturbance_settling_tolerance']:.8g} %"
         )
         text_lines.append(f"Pade-Ordnung fuer Zeitbereich und Wurzelortskurve: {data['pade_order']}")
         text_lines.append("")
