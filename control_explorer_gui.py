@@ -15,7 +15,7 @@ import warnings
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle, FancyArrowPatch, Rectangle
+from matplotlib.patches import FancyArrowPatch, Rectangle
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -1374,8 +1374,21 @@ class ControlExplorerApp(tk.Tk):
         muted_color = "#8a8a8a"
         block_edge = "#444444"
         block_inactive = "#f0f0f0"
+        block_width = 0.12
+        block_height = 0.12
+        sum_marker_size = 150
+        sum_marker_radius_pts = float(np.sqrt(sum_marker_size / np.pi))
 
-        def add_arrow(start, end, text=None, text_offset=(0.0, 0.045), color=signal_color, lw=1.2):
+        def add_arrow(
+            start,
+            end,
+            text=None,
+            text_offset=(0.0, 0.045),
+            color=signal_color,
+            lw=1.2,
+            shrink_a=0.0,
+            shrink_b=0.0,
+        ):
             arrow = FancyArrowPatch(
                 start,
                 end,
@@ -1383,8 +1396,8 @@ class ControlExplorerApp(tk.Tk):
                 mutation_scale=9,
                 linewidth=lw,
                 color=color,
-                shrinkA=0,
-                shrinkB=0,
+                shrinkA=shrink_a,
+                shrinkB=shrink_b,
             )
             ax.add_patch(arrow)
             if text:
@@ -1398,7 +1411,7 @@ class ControlExplorerApp(tk.Tk):
                     color=color,
                 )
 
-        def add_block(center, text, active=True, width=0.12, height=0.16):
+        def add_block(center, text, active=True, width=block_width, height=block_height):
             x = center[0] - width / 2
             y = center[1] - height / 2
             face = "#ffffff" if active else block_inactive
@@ -1415,61 +1428,107 @@ class ControlExplorerApp(tk.Tk):
             ax.add_patch(rect)
             ax.text(center[0], center[1], text, ha="center", va="center", fontsize=8.8, color=edge)
 
-        def add_sum(center):
-            circle = Circle(center, 0.055, facecolor="#ffffff", edgecolor=block_edge, linewidth=1.1)
-            ax.add_patch(circle)
-            ax.plot(
-                [center[0] - 0.032, center[0] + 0.032],
-                [center[1] + 0.032, center[1] - 0.032],
-                color=muted_color,
-                linewidth=0.75,
+        def add_sum(center, sign=None, sign_pos="bottom"):
+            ax.scatter(
+                [center[0]],
+                [center[1]],
+                s=sum_marker_size,
+                facecolors="#ffffff",
+                edgecolors=block_edge,
+                linewidths=1.1,
+                zorder=3,
             )
-            ax.plot(
-                [center[0] - 0.032, center[0] + 0.032],
-                [center[1] - 0.032, center[1] + 0.032],
-                color=muted_color,
-                linewidth=0.75,
-            )
+            if sign == "-" and sign_pos == "bottom":
+                ax.text(
+                    center[0] + 0.02,
+                    center[1] - 0.085,
+                    "-",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                    color=signal_color,
+                )
+            elif sign == "+" and sign_pos == "top":
+                ax.text(
+                    center[0] + 0.02,
+                    center[1] + 0.085,
+                    "+",
+                    ha="center",
+                    va="center",
+                    fontsize=10,
+                    color=signal_color,
+                )
 
-        y_main = 0.63
-        y_feedback = 0.25
-        x_v = 0.19
-        x_sum_e = 0.34
-        x_k = 0.48
-        x_sum_d = 0.64
-        x_g = 0.79
-        x_out = 0.96
+        y_main = 0.64
+        y_feedback = 0.27
+        x_v = 0.15
+        x_sum_e = 0.31
+        x_k = 0.46
+        x_sum_d = 0.60
+        x_g = 0.76
+        x_out = 0.95
+        delta_arrow = 0.005
 
         add_block((x_v, y_main), "V(s)" if data["prefilter_enabled"] else "V=1", data["prefilter_enabled"])
-        add_sum((x_sum_e, y_main))
+        add_sum((x_sum_e, y_main), sign="-", sign_pos="bottom")
         add_block((x_k, y_main), "K(s)" if data["controller_enabled"] else "K=1", data["controller_enabled"])
-        add_sum((x_sum_d, y_main))
+        add_sum((x_sum_d, y_main), sign="+", sign_pos="top")
         add_block((x_g, y_main), "G(s)", True)
 
-        add_arrow((0.04, y_main), (x_v - 0.07, y_main), "w")
-        add_arrow((x_v + 0.06, y_main), (x_sum_e - 0.06, y_main))
-        add_arrow((x_sum_e + 0.055, y_main), (x_k - 0.06, y_main), "e")
-        add_arrow((x_k + 0.06, y_main), (x_sum_d - 0.055, y_main), "u_R")
-        add_arrow((x_sum_d + 0.055, y_main), (x_g - 0.06, y_main), "u")
-        add_arrow((x_g + 0.06, y_main), (x_out, y_main), "y")
-        add_arrow((x_sum_d, 0.93), (x_sum_d, y_main + 0.058), "d", text_offset=(0.025, -0.005))
-
-        ax.plot([0.90, 0.90, x_sum_e], [y_main, y_feedback, y_feedback], color=muted_color, linewidth=1.1)
-        add_arrow((x_sum_e, y_feedback), (x_sum_e, y_main - 0.058), color=muted_color, lw=1.1)
-        ax.text(x_sum_e - 0.035, y_main - 0.085, "-", ha="center", va="center", fontsize=11, color=muted_color)
-        ax.text(x_sum_e - 0.035, y_main + 0.07, "+", ha="center", va="center", fontsize=9, color=muted_color)
-        ax.text(x_sum_d - 0.04, y_main + 0.07, "+", ha="center", va="center", fontsize=9, color=muted_color)
-        ax.text(x_sum_d - 0.035, y_main - 0.075, "+", ha="center", va="center", fontsize=9, color=muted_color)
-
-        ax.text(
-            0.02,
-            0.05,
-            "Einheitsrueckfuehrung, Stoerung additiv am Streckeneingang",
-            ha="left",
-            va="bottom",
-            fontsize=7.5,
-            color="#666666",
+        add_arrow((0.04, y_main), (x_v - block_width / 2, y_main), "$w$")
+        add_arrow(
+            (x_v + block_width / 2, y_main),
+            (x_sum_e + delta_arrow, y_main),
+            shrink_b=sum_marker_radius_pts,
         )
+        add_arrow(
+            (x_sum_e, y_main),
+            (x_k - block_width / 2, y_main),
+            "$e$",
+            text_offset=(0.0, 0.03),
+            shrink_a=sum_marker_radius_pts,
+        )
+        add_arrow(
+            (x_k + block_width / 2, y_main),
+            (x_sum_d + delta_arrow, y_main),
+            "$u_R$",
+            text_offset=(-0.01, 0.03),
+            shrink_b=sum_marker_radius_pts,
+        )
+        add_arrow(
+            (x_sum_d, y_main),
+            (x_g - block_width / 2, y_main),
+            "$u$",
+            text_offset=(0.0, 0.03),
+            shrink_a=sum_marker_radius_pts,
+        )
+        add_arrow((x_g + block_width / 2, y_main), (x_out, y_main), "$y$")
+        add_arrow(
+            (x_sum_d, 0.92),
+            (x_sum_d, y_main - delta_arrow),
+            "$d$",
+            text_offset=(0.018, 0.0),
+            shrink_b=sum_marker_radius_pts,
+        )
+
+        ax.plot([0.90, 0.90, x_sum_e], [y_main, y_feedback, y_feedback], color=signal_color, linewidth=1.1)
+        add_arrow(
+            (x_sum_e, y_feedback),
+            (x_sum_e, y_main + delta_arrow),
+            color=signal_color,
+            lw=1.1,
+            shrink_b=sum_marker_radius_pts,
+        )
+
+        # ax.text(
+        #     0.02,
+        #     0.05,
+        #     "Einheitsrueckfuehrung, Stoerung additiv am Streckeneingang",
+        #     ha="left",
+        #     va="bottom",
+        #     fontsize=7.5,
+        #     color="#666666",
+        # )
 
         self.fig_block.subplots_adjust(left=0.02, right=0.98, bottom=0.04, top=0.98)
         self.canvas_block.draw_idle()
