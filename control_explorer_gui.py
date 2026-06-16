@@ -1388,6 +1388,7 @@ class ControlExplorerApp(tk.Tk):
             lw=1.2,
             shrink_a=0.0,
             shrink_b=0.0,
+            fontsize=10,
         ):
             arrow = FancyArrowPatch(
                 start,
@@ -1406,8 +1407,8 @@ class ControlExplorerApp(tk.Tk):
                     0.5 * (start[1] + end[1]) + text_offset[1],
                     text,
                     ha="center",
-                    va="bottom",
-                    fontsize=8,
+                    va="center",
+                    fontsize=fontsize,
                     color=color,
                 )
 
@@ -1475,7 +1476,7 @@ class ControlExplorerApp(tk.Tk):
         add_sum((x_sum_d, y_main), sign="+", sign_pos="top")
         add_block((x_g, y_main), "G(s)", True)
 
-        add_arrow((0.04, y_main), (x_v - block_width / 2, y_main), "$w$")
+        add_arrow((0.04, y_main), (x_v - block_width / 2, y_main), "$w$", text_offset=(-0.01, 0.06))
         add_arrow(
             (x_v + block_width / 2, y_main),
             (x_sum_e + delta_arrow, y_main),
@@ -1485,29 +1486,29 @@ class ControlExplorerApp(tk.Tk):
             (x_sum_e, y_main),
             (x_k - block_width / 2, y_main),
             "$e$",
-            text_offset=(0.0, 0.03),
+            text_offset=(0.0, 0.06),
             shrink_a=sum_marker_radius_pts,
         )
         add_arrow(
             (x_k + block_width / 2, y_main),
             (x_sum_d + delta_arrow, y_main),
             "$u_R$",
-            text_offset=(-0.01, 0.03),
+            text_offset=(-0.01, 0.05),
             shrink_b=sum_marker_radius_pts,
         )
         add_arrow(
             (x_sum_d, y_main),
             (x_g - block_width / 2, y_main),
             "$u$",
-            text_offset=(0.0, 0.03),
+            text_offset=(0.0, 0.06),
             shrink_a=sum_marker_radius_pts,
         )
-        add_arrow((x_g + block_width / 2, y_main), (x_out, y_main), "$y$")
+        add_arrow((x_g + block_width / 2, y_main), (x_out, y_main), "$y$", text_offset=(0.0, 0.05))
         add_arrow(
             (x_sum_d, 0.92),
             (x_sum_d, y_main - delta_arrow),
             "$d$",
-            text_offset=(0.018, 0.0),
+            text_offset=(0.018, 0.06),
             shrink_b=sum_marker_radius_pts,
         )
 
