@@ -1,8 +1,12 @@
 # Control Explorer
 
-Desktop-GUI zur Untersuchung von SISO-Uebertragungsfunktionen mit Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und `python-control` SISO Tool.
+Desktop-GUI zur Untersuchung eines SISO-Standardregelkreises mit optionalem Vorfilter, getrennt definierbarem Regler `K(s)` und Strecke `G(s)`, Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort, Stoeraufschaltung und `python-control` SISO Tool.
 
-Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K G_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole fuer den ausgewaehlten Gain, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert. Ein Modellhinweis zeigt direkt im Plot, ob eine vorhandene Totzeit ignoriert oder mit welcher Pade-Ordnung sie approximiert wird. Ein Klick auf die Wurzelortskurve uebernimmt den gewaehlten Gain in den erkannten Verstaerkungsparameter des Parametercodes und aktualisiert damit alle Darstellungen.
+Der linke Eingabebereich zeigt den Regelkreis als Blockdiagramm. Vorfilter und Regler koennen einzeln aktiviert oder deaktiviert werden; die Strecke bleibt das zentrale Anlagenmodell. Frequenz- und Stabilitaetsplots verwenden den offenen Kreis `L(s)=K(s)G(s)`, waehrend Sprungantwort und Fuehrungsfrequenzgang bei aktivem Vorfilter `Y(s)/W(s)=V(s)L(s)/(1+L(s))` auswerten.
+
+Der Tab `Stoeraufschaltung` simuliert eine additive Stoerung am Streckeneingang. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Stoersignal `d(t)` und der resultierende Streckeneingang `u(t)` inklusive einer einfachen Ausregelzeit-Schaetzung nach dem Stoersprung.
+
+Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K L_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich, wobei `L_0(s)` der offene Kreis ohne den gerade markierten WOK-Gain ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole fuer den ausgewaehlten Gain, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert. Ein Modellhinweis zeigt direkt im Plot, ob eine vorhandene Totzeit ignoriert oder mit welcher Pade-Ordnung sie approximiert wird. Ein Klick auf die Wurzelortskurve uebernimmt den gewaehlten Gain in den erkannten Verstaerkungsparameter des Parametercodes und aktualisiert damit alle Darstellungen.
 
 ## Direkt aus Python starten
 
@@ -145,7 +149,7 @@ Vor einer Veroeffentlichung:
 
 1. `dist\ControlExplorer\ControlExplorer.exe` auf einem Windows-Rechner ohne Python testen.
 2. `dist/ControlExplorer/ControlExplorer` auf einem Linux-Rechner ohne aktivierte Python-Umgebung testen.
-3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Hover, SISO Tool sowie Beispiel-Speichern/Laden pruefen.
+3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung, Hover, SISO Tool sowie Beispiel-Speichern/Laden pruefen.
 4. Den vollstaendigen Ordner als ZIP-Datei veroeffentlichen, beispielsweise ueber GitHub Releases.
 5. Fuer eine professionelle oeffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
 
