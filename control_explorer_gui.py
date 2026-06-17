@@ -137,6 +137,7 @@ class ControlExplorerApp(tk.Tk):
         self._hover_data = {}
         self._hover_annotations = {}
         self._hover_backgrounds = {}
+        self._hover_ready = set()
         self._hover_after_id = None
         self._pending_hover = None
         self._last_hover_target = (None, None)
@@ -1096,6 +1097,25 @@ class ControlExplorerApp(tk.Tk):
         status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN, padding=(6, 3))
         status.grid(row=2, column=0, sticky="ew")
 
+    def _refresh_hover_state_after_layout_change(self):
+        self._pending_hover = None
+        self._last_hover_target = (None, None)
+        for annotation in self._hover_annotations.values():
+            if annotation.get_visible():
+                annotation.set_visible(False)
+        for ax in list(self._hover_backgrounds):
+            self._hover_backgrounds.pop(ax, None)
+        self._hover_ready.clear()
+        self.update_idletasks()
+        for canvas in (
+            self.canvas_nyquist,
+            self.canvas_bode,
+            self.canvas_root_locus,
+            self.canvas_step,
+            self.canvas_disturbance,
+        ):
+            canvas.draw_idle()
+
     def _set_output_message(self, message="", level="warning"):
         if not hasattr(self, "output_label"):
             return
@@ -1103,6 +1123,7 @@ class ControlExplorerApp(tk.Tk):
         if not message:
             self.output_var.set("")
             self.output_label.grid_remove()
+            self._refresh_hover_state_after_layout_change()
             return
 
         colors = {
@@ -1114,6 +1135,7 @@ class ControlExplorerApp(tk.Tk):
         self.output_label.configure(bg=background, fg=foreground)
         self.output_var.set(message)
         self.output_label.grid()
+        self._refresh_hover_state_after_layout_change()
 
     def _create_left_panel(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1822,6 +1844,7 @@ class ControlExplorerApp(tk.Tk):
 
     def _cache_hover_backgrounds(self, event):
         canvas = event.canvas
+        self._hover_ready.add(canvas)
         for ax in canvas.figure.axes:
             if ax in self._hover_annotations:
                 self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
@@ -1841,6 +1864,8 @@ class ControlExplorerApp(tk.Tk):
             annotation = self._hover_annotations.get(ax)
 
             if background is None:
+                if annotation is not None and annotation.get_visible():
+                    annotation.set_visible(False)
                 canvas.draw_idle()
                 continue
 
@@ -1887,6 +1912,7 @@ class ControlExplorerApp(tk.Tk):
                 canvases.add(ax.figure.canvas)
             self._hover_data.pop(ax, None)
             self._hover_backgrounds.pop(ax, None)
+            self._hover_ready.discard(ax.figure.canvas)
 
         if redraw:
             for canvas in canvases:
@@ -2163,6 +2189,13 @@ class ControlExplorerApp(tk.Tk):
     def _on_plot_hover(self, event):
         if self._is_updating:
             return
+        if (
+            event.inaxes is None
+            or event.canvas not in self._hover_ready
+            or event.inaxes not in self._hover_annotations
+            or event.inaxes not in self._hover_backgrounds
+        ):
+            return
         self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
         if self._hover_after_id is None:
             self._hover_after_id = self.after(25, self._process_plot_hover)
@@ -2178,7 +2211,13 @@ class ControlExplorerApp(tk.Tk):
         ax, xdata, ydata, canvas = self._pending_hover
         self._pending_hover = None
 
-        if ax not in self._hover_data or xdata is None or ydata is None:
+        if (
+            ax not in self._hover_data
+            or xdata is None
+            or ydata is None
+            or not np.isfinite(xdata)
+            or not np.isfinite(ydata)
+        ):
             changed_axes = []
             for annotation in self._hover_annotations.values():
                 if annotation.get_visible():
@@ -2186,6 +2225,15 @@ class ControlExplorerApp(tk.Tk):
                     changed_axes.append(annotation.axes)
             self._last_hover_target = (None, None)
             self._draw_hover_axes(changed_axes)
+            return
+
+        if ax not in self._hover_backgrounds:
+            # Der Plot ist noch nicht vollständig gerendert; Hover-Labels werden
+            # erst dann gezeigt, wenn ein sauberer Hintergrund vorhanden ist.
+            annotation = self._hover_annotations.get(ax)
+            if annotation is not None and annotation.get_visible():
+                annotation.set_visible(False)
+            canvas.draw_idle()
             return
 
         data = self._hover_data[ax]
