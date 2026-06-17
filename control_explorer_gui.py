@@ -60,8 +60,8 @@ class ControlExplorerApp(tk.Tk):
 
     DEFAULT_SETTINGS = {
         "omega_min": "0",
-        "omega_max": "30",
-        "n_points": "6000",
+        "omega_max": "100",
+        "n_points": "10000",
         "bode_x_min": "1e-1",
         "bode_x_max": "1e3",
         "bode_frequency_unit": BODE_UNIT_OMEGA,
@@ -69,14 +69,14 @@ class ControlExplorerApp(tk.Tk):
         "controller_enabled": True,
         "prefilter_enabled": False,
         "root_locus_gain_min": "0",
-        "root_locus_gain_max": "1e3",
-        "root_locus_points": "800",
+        "root_locus_gain_max": "1e4",
+        "root_locus_points": "1000",
         "root_locus_marker_gain": "1",
         "root_locus_gain_parameter": "",
         "root_locus_log_gain": True,
         "root_locus_include_delay": False,
         "root_locus_equal_axis": False,
-        "root_locus_show_damping": True,
+        "root_locus_show_damping": False,
         "root_locus_damping_ratios": "0.2, 0.4, 0.6, 0.8",
         "t_max": "20",
         "t_points": "2000",
@@ -84,12 +84,12 @@ class ControlExplorerApp(tk.Tk):
         "disturbance_amplitude": "2",
         "disturbance_time": "5",
         "disturbance_end_time": "",
-        "disturbance_location": DISTURBANCE_INPUT,
+        "disturbance_location": DISTURBANCE_OUTPUT,
         "disturbance_settling_tolerance": "2",
         "disturbance_show_reference_component": True,
         "disturbance_show_disturbance_component": True,
         "pade_order": "6",
-        "marker_omega": "0, 1",
+        "marker_omega": "1",
         "nyquist_plot_system": SYSTEM_OPEN,
         "bode_plot_system": SYSTEM_OPEN,
         "step_plot_system": SYSTEM_CLOSED,
@@ -99,7 +99,7 @@ class ControlExplorerApp(tk.Tk):
         "show_negative_freq": False,
         "show_critical_point": True,
         "normalized_nyquist": False,
-        "direction_arrow_omegas": "1, 5, 10, 20",
+        "direction_arrow_omegas": "0.5, 2, 5",
     }
     GLOBAL_SETTING_KEYS = frozenset(
         {
@@ -488,23 +488,32 @@ class ControlExplorerApp(tk.Tk):
     def _open_direction_arrow_settings(self):
         self._open_settings_window()
 
-    def _open_settings_window(self):
+    def _open_settings_window(self, initial_tab=None):
         if self._settings_window is not None and self._settings_window.winfo_exists():
             self._settings_window.lift()
             self._settings_window.focus_force()
+            if initial_tab is not None:
+                try:
+                    notebook = self._settings_window.notebook
+                    tab_widgets = getattr(self._settings_window, "_tab_widgets", {})
+                    if initial_tab in tab_widgets:
+                        notebook.select(tab_widgets[initial_tab])
+                except Exception:
+                    pass
             return
 
         dialog = tk.Toplevel(self)
         self._settings_window = dialog
         dialog.title("Einstellungen")
         dialog.transient(self)
-        dialog.geometry("560x540")
-        dialog.minsize(520, 460)
+        dialog.geometry("760x640")
+        dialog.minsize(700, 560)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
         dialog.protocol("WM_DELETE_WINDOW", lambda: self._close_settings_window(dialog))
 
         notebook = ttk.Notebook(dialog)
+        dialog.notebook = notebook
         notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
         tab_nyquist = ttk.Frame(notebook, padding=10)
@@ -521,6 +530,15 @@ class ControlExplorerApp(tk.Tk):
         notebook.add(tab_disturbance, text="Störaufschaltung")
         notebook.add(tab_general, text="Allgemein")
 
+        dialog._tab_widgets = {
+            "Nyquist / Ortskurve": tab_nyquist,
+            "Frequenz / Bode": tab_freq,
+            "Wurzelortskurve": tab_root_locus,
+            "Sprungantwort": tab_step,
+            "Störaufschaltung": tab_disturbance,
+            "Allgemein": tab_general,
+        }
+
         for tab in (tab_nyquist, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_general):
             tab.columnconfigure(0, weight=1)
 
@@ -530,6 +548,9 @@ class ControlExplorerApp(tk.Tk):
         self._create_step_settings(tab_step)
         self._create_disturbance_settings(tab_disturbance)
         self._create_general_settings(tab_general)
+
+        if initial_tab is not None and initial_tab in dialog._tab_widgets:
+            notebook.select(dialog._tab_widgets[initial_tab])
 
         button_frame = ttk.Frame(dialog)
         button_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
@@ -749,8 +770,8 @@ class ControlExplorerApp(tk.Tk):
         dialog = tk.Toplevel(self)
         dialog.title(title)
         dialog.transient(self)
-        dialog.geometry("760x680")
-        dialog.minsize(620, 480)
+        dialog.geometry("920x760")
+        dialog.minsize(760, 560)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
 
@@ -1365,7 +1386,7 @@ class ControlExplorerApp(tk.Tk):
         ttk.Button(
             disturbance_options,
             text="Störung einstellen...",
-            command=self._open_settings_window,
+            command=lambda: self._open_settings_window(initial_tab="Störaufschaltung"),
         ).pack(side=tk.RIGHT)
 
         self.fig_nyquist = Figure(figsize=(7, 6), dpi=100)
@@ -1748,11 +1769,9 @@ class ControlExplorerApp(tk.Tk):
         """
         Registriert Hover-Daten für eine Achse.
 
-        Wichtig: Hover-Annotationen werden bewusst ohne Pfeil gezeichnet.
-        Matplotlib kann bei schnell bewegten Annotationen mit Pfeil und sehr
-        nahe/ungültigen Punkten intern in split_path_inout(...) einen
-        StopIteration-Fehler werfen. Ohne Pfeil bleibt die Box stabil,
-        schnell und wird weiterhin dynamisch neben dem Datenpunkt positioniert.
+        Hover-Annotationen verwenden wieder einen Pfeil, werden aber
+        zusätzlich robust gegen Matplotlib-Fehler behandelt, damit die
+        Annotation stabil bleibt und der GUI-Callback nicht abstürzt.
         """
         annotation = ax.annotate(
             "",
@@ -1761,6 +1780,13 @@ class ControlExplorerApp(tk.Tk):
             textcoords="offset points",
             annotation_clip=False,
             bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.95},
+            arrowprops={
+                "arrowstyle": "->",
+                "color": "#555555",
+                "shrinkA": 0,
+                "shrinkB": 3,
+                "connectionstyle": "arc3,rad=0",
+            },
             fontsize=9,
             zorder=20,
         )
@@ -1984,7 +2010,7 @@ class ControlExplorerApp(tk.Tk):
         add_block((x_g, y_main), "G(s)", True)
         add_sum((x_sum_dy, y_main), sign="+", sign_pos="top")
 
-        add_arrow((0.04, y_main), (x_v - block_width / 2, y_main), "$w$", text_offset=(-0.01, 0.06))
+        add_arrow((0.02, y_main), (x_v - block_width / 2, y_main), "$w$", text_offset=(-0.01, 0.06))
         add_arrow(
             (x_v + block_width / 2, y_main),
             (x_sum_e + delta_arrow, y_main),
@@ -2034,7 +2060,7 @@ class ControlExplorerApp(tk.Tk):
             (x_sum_dy, 0.92),
             (x_sum_dy, y_main - delta_arrow),
             r"$d_y$",
-            text_offset=(0.018, 0.06),
+            text_offset=(0.026, 0.06),
             shrink_b=sum_marker_radius_pts,
         )
 
