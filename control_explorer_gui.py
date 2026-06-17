@@ -1761,7 +1761,6 @@ class ControlExplorerApp(tk.Tk):
             textcoords="offset points",
             annotation_clip=False,
             bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.95},
-            arrowprops={"arrowstyle": "->", "color": "#555555"},
             fontsize=9,
             zorder=20,
         )
@@ -1769,8 +1768,6 @@ class ControlExplorerApp(tk.Tk):
         annotation.set_clip_on(False)
         if annotation.get_bbox_patch() is not None:
             annotation.get_bbox_patch().set_clip_on(False)
-        if annotation.arrow_patch is not None:
-            annotation.arrow_patch.set_clip_on(False)
 
         self._hover_annotations[ax] = annotation
         self._hover_data[ax] = {
@@ -1779,6 +1776,24 @@ class ControlExplorerApp(tk.Tk):
             "y": np.asarray(y, dtype=float),
             **extra,
         }
+
+        if not hasattr(ax, "_control_explorer_hover_callbacks"):
+            ax._control_explorer_hover_callbacks = [
+                ax.callbacks.connect("xlim_changed", self._on_hover_axes_limits_changed),
+                ax.callbacks.connect("ylim_changed", self._on_hover_axes_limits_changed),
+            ]
+
+    def _on_hover_axes_limits_changed(self, ax):
+        if self._is_updating:
+            return
+        annotation = self._hover_annotations.get(ax)
+        if annotation is None or not annotation.get_visible():
+            return
+        annotation.set_visible(False)
+        self._last_hover_target = (None, None)
+        self._hover_backgrounds.pop(ax, None)
+        ax.figure.canvas.draw_idle()
+
     def _cache_hover_backgrounds(self, event):
         canvas = event.canvas
         for ax in canvas.figure.axes:
@@ -1821,6 +1836,38 @@ class ControlExplorerApp(tk.Tk):
                 except Exception:
                     pass
                 canvas.draw_idle()
+
+    def _clear_hover_annotations(self, axes=None, redraw=True):
+        if self._hover_after_id is not None:
+            self.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        self._pending_hover = None
+        self._last_hover_target = (None, None)
+
+        if axes is None:
+            axes_to_clear = list(self._hover_annotations.keys())
+        else:
+            axes_to_clear = list(axes)
+
+        canvases = set()
+        for ax in axes_to_clear:
+            annotation = self._hover_annotations.pop(ax, None)
+            if annotation is not None:
+                try:
+                    annotation.set_visible(False)
+                    annotation.remove()
+                except (ValueError, RuntimeError):
+                    pass
+                canvases.add(ax.figure.canvas)
+            self._hover_data.pop(ax, None)
+            self._hover_backgrounds.pop(ax, None)
+
+        if redraw:
+            for canvas in canvases:
+                canvas.draw_idle()
+
+    def _clear_hover_for_axes(self, *axes):
+        self._clear_hover_annotations(axes=axes, redraw=False)
 
     def _update_block_diagram(self, data):
         ax = self.ax_block
@@ -2088,12 +2135,17 @@ class ControlExplorerApp(tk.Tk):
 
 
     def _on_plot_hover(self, event):
+        if self._is_updating:
+            return
         self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
         if self._hover_after_id is None:
             self._hover_after_id = self.after(25, self._process_plot_hover)
 
     def _process_plot_hover(self):
         self._hover_after_id = None
+        if self._is_updating:
+            self._pending_hover = None
+            return
         if self._pending_hover is None:
             return
 
@@ -2248,12 +2300,16 @@ class ControlExplorerApp(tk.Tk):
         self.controller_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
         self.prefilter_text.bind("<KeyRelease>", lambda _event: self.schedule_update())
 
-        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.schedule_update())
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
 
     def _on_setting_changed(self):
         if self._loading_settings:
             return
         self._schedule_settings_save()
+        self.schedule_update()
+
+    def _on_notebook_tab_changed(self, _event):
+        self._clear_hover_annotations(redraw=True)
         self.schedule_update()
 
     # ------------------------------------------------------------------
@@ -2902,6 +2958,7 @@ class ControlExplorerApp(tk.Tk):
         if self._after_id is not None:
             self.after_cancel(self._after_id)
         self._after_id = None
+        self._clear_hover_annotations(redraw=True)
         self._is_updating = True
         self._control_warnings = []
         self._set_output_message("")
@@ -3001,6 +3058,7 @@ class ControlExplorerApp(tk.Tk):
 
     def _plot_nyquist(self, omega, H, markers):
         ax = self.ax_nyquist
+        self._clear_hover_for_axes(ax)
         ax.clear()
 
         selected = self.nyquist_plot_system_var.get()
@@ -3112,11 +3170,7 @@ class ControlExplorerApp(tk.Tk):
         if normalized:
             # Im Logo-/Normierungsmodus bewusst keinen Hover verwenden:
             # keine Zahlen/Raster und keine dynamischen Messwertboxen.
-            self._hover_data.pop(ax, None)
-            annotation = self._hover_annotations.pop(ax, None)
-            if annotation is not None:
-                annotation.set_visible(False)
-            self._hover_backgrounds.pop(ax, None)
+            self._clear_hover_for_axes(ax)
         else:
             self._register_hover(ax, "nyquist", plot_H.real, plot_H.imag, omega=np.asarray(plot_omega))
 
@@ -3432,6 +3486,7 @@ class ControlExplorerApp(tk.Tk):
         ax_mag = self.ax_mag
         ax_phase = self.ax_phase
 
+        self._clear_hover_for_axes(ax_mag, ax_phase)
         ax_mag.clear()
         ax_phase.clear()
 
@@ -3708,10 +3763,9 @@ class ControlExplorerApp(tk.Tk):
 
     def _plot_root_locus(self, sys_root_locus, gains, marker_gain, delay=0.0, pade_order=0):
         ax = self.ax_root_locus
+        self._clear_hover_for_axes(ax)
         ax.clear()
         self._root_locus_click_data = None
-        self._hover_data.pop(ax, None)
-        self._hover_annotations.pop(ax, None)
 
         response = self._call_control(
             "root_locus_map",
@@ -3893,6 +3947,7 @@ class ControlExplorerApp(tk.Tk):
     def _plot_disturbance_response(self, data):
         ax_y = self.ax_dist_y
         ax_u = self.ax_dist_u
+        self._clear_hover_for_axes(ax_y, ax_u)
         ax_y.clear()
         ax_u.clear()
 
@@ -4168,9 +4223,8 @@ class ControlExplorerApp(tk.Tk):
 
     def _plot_step(self, sys_time, t, step_amplitude):
         ax = self.ax_step
+        self._clear_hover_for_axes(ax)
         ax.clear()
-        self._hover_data.pop(ax, None)
-        self._hover_annotations.pop(ax, None)
 
         try:
             tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
