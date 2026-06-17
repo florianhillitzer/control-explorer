@@ -8,7 +8,7 @@
 
 Projekt: Control Explorer
 
-Zweck: Lehr- und Analysewerkzeug fuer SISO-Regelkreise im regelungstechnischen Praktikum.
+Zweck: Lehr- und Analysewerkzeug für SISO-Regelkreise im regelungstechnischen Praktikum.
 
 Kontakt / dienstliche Anschrift: 
 Florian Hillitzer 
@@ -21,9 +21,9 @@ Albert-Einstein-Allee 41,
 
 Control Explorer steht unter der **{{APP_LICENSE}}**.
 
-Kurzfassung: Nutzung, Kopieren, Veraendern und Weitergabe sind erlaubt, solange Lizenz- und Copyright-Hinweise erhalten bleiben. Die Software wird ohne Gewaehrleistung bereitgestellt.
+Kurzfassung: Nutzung, Kopieren, Verändern und Weitergabe sind erlaubt, solange Lizenz- und Copyright-Hinweise erhalten bleiben. Die Software wird ohne Gewährleistung bereitgestellt.
 
-Massgeblich ist der vollstaendige Lizenztext in der Datei `LICENSE`.
+Maßgeblich ist der vollständige Lizenztext in der Datei `LICENSE`.
 
 ## Drittkomponenten
 
@@ -31,4 +31,4 @@ Massgeblich ist der vollstaendige Lizenztext in der Datei `LICENSE`.
 
 ## Hinweis
 
-Diese Anzeige ist ein praktischer Ueberblick fuer Nutzerinnen und Nutzer. Fuer die Weitergabe eines gebauten Programmpakets sollten `LICENSE`, `NOTICE` und die Lizenzhinweise der gebuendelten Drittkomponenten mit ausgeliefert werden.
+Diese Anzeige ist ein praktischer Überblick für Nutzerinnen und Nutzer. Für die Weitergabe eines gebauten Programmpakets sollten `LICENSE`, `NOTICE` und die Lizenzhinweise der gebündelten Drittkomponenten mit ausgeliefert werden.

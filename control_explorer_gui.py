@@ -43,14 +43,16 @@ class ControlExplorerApp(tk.Tk):
           K_R / (s**3 + 3*s**2 + 3*s + 1)
     - Enter an optional exact delay for frequency-domain plots, e.g. T_t
     - Nyquist/Bode use exact delay e^{-j omega T_t}
-    - Step response uses a Pade approximation of the delay
+    - Step response uses a Padé approximation of the delay
     """
 
     SYSTEM_OPEN = r"Offener Kreis L(s)=K(s)G(s)"
-    SYSTEM_CLOSED = r"Fuehrungsuebertragung Y(s)/W(s)"
-    SYSTEM_SENS = "Sensitivitaet S(s)"
+    SYSTEM_CLOSED = r"Führungsübertragung Y(s)/W(s)"
+    SYSTEM_SENS = "Sensitivität S(s)"
     BODE_UNIT_OMEGA = "rad/s"
     BODE_UNIT_HZ = "Hz"
+    DISTURBANCE_INPUT = r"Streckeneingang d_u"
+    DISTURBANCE_OUTPUT = r"Streckenausgang d_y"
     APP_NAME = "Control Explorer"
     APP_VERSION_FALLBACK = "0.3.0"
     COPYRIGHT_HOLDER = "Florian Hillitzer"
@@ -82,6 +84,7 @@ class ControlExplorerApp(tk.Tk):
         "disturbance_amplitude": "2",
         "disturbance_time": "5",
         "disturbance_end_time": "",
+        "disturbance_location": DISTURBANCE_INPUT,
         "disturbance_settling_tolerance": "2",
         "disturbance_show_reference_component": True,
         "disturbance_show_disturbance_component": True,
@@ -117,15 +120,16 @@ class ControlExplorerApp(tk.Tk):
         self._hover_after_id = None
         self._pending_hover = None
         self._last_hover_target = (None, None)
-        self._sisotool_result = None
         self._root_locus_click_data = None
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
         self.examples_dir = self._documents_directory() / "Control Explorer Examples"
         self.app_version = self._read_version()
+        self.current_example_path = None
+        self.current_example_var = tk.StringVar(value="Aktuelles Beispiel: keines geladen")
 
-        self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung")
+        self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung")
         self._set_window_icon()
         self.geometry("1300x820")
         self.minsize(1050, 650)
@@ -280,6 +284,7 @@ class ControlExplorerApp(tk.Tk):
         self.disturbance_amplitude_var = tk.StringVar(value=defaults["disturbance_amplitude"])
         self.disturbance_time_var = tk.StringVar(value=defaults["disturbance_time"])
         self.disturbance_end_time_var = tk.StringVar(value=defaults["disturbance_end_time"])
+        self.disturbance_location_var = tk.StringVar(value=defaults["disturbance_location"])
         self.disturbance_settling_tolerance_var = tk.StringVar(value=defaults["disturbance_settling_tolerance"])
         self.disturbance_show_reference_component_var = tk.BooleanVar(
             value=defaults["disturbance_show_reference_component"]
@@ -329,6 +334,7 @@ class ControlExplorerApp(tk.Tk):
             "disturbance_amplitude": self.disturbance_amplitude_var,
             "disturbance_time": self.disturbance_time_var,
             "disturbance_end_time": self.disturbance_end_time_var,
+            "disturbance_location": self.disturbance_location_var,
             "disturbance_settling_tolerance": self.disturbance_settling_tolerance_var,
             "disturbance_show_reference_component": self.disturbance_show_reference_component_var,
             "disturbance_show_disturbance_component": self.disturbance_show_disturbance_component_var,
@@ -366,6 +372,8 @@ class ControlExplorerApp(tk.Tk):
                 normalized[key] = self.DEFAULT_SETTINGS[key]
             elif value is not None:
                 normalized[key] = value
+        if normalized.get("disturbance_location") not in (None, self.DISTURBANCE_INPUT, self.DISTURBANCE_OUTPUT):
+            normalized["disturbance_location"] = self.DEFAULT_SETTINGS["disturbance_location"]
         return normalized
 
     def _apply_settings(self, settings):
@@ -386,7 +394,7 @@ class ControlExplorerApp(tk.Tk):
             with self.settings_path.open("r", encoding="utf-8") as handle:
                 settings = json.load(handle)
             if not isinstance(settings, dict):
-                raise ValueError("Die Einstellungsdatei enthaelt kein JSON-Objekt.")
+                raise ValueError("Die Einstellungsdatei enthält kein JSON-Objekt.")
             self._apply_settings(settings)
         except Exception as exc:
             messagebox.showwarning(
@@ -411,7 +419,7 @@ class ControlExplorerApp(tk.Tk):
         self._settings_save_after_id = self.after(500, self._save_settings)
 
     def reset_settings(self):
-        if not messagebox.askyesno("Werkseinstellungen", "Alle Einstellungen auf Werkseinstellungen zuruecksetzen?"):
+        if not messagebox.askyesno("Werkseinstellungen", "Alle Einstellungen auf Werkseinstellungen zurücksetzen?"):
             return
         self._apply_settings(self.DEFAULT_SETTINGS)
         self._save_settings()
@@ -434,8 +442,6 @@ class ControlExplorerApp(tk.Tk):
 
         settings_menu = tk.Menu(menu_bar, tearoff=False)
         settings_menu.add_command(label="Einstellungen öffnen...", command=self._open_settings_window)
-        settings_menu.add_separator()
-        settings_menu.add_command(label="SISO Tool öffnen", command=self.open_sisotool)
 
         menu_bar.add_cascade(label="Einstellungen", menu=settings_menu)
         menu_bar.add_command(label="Hilfe", command=lambda: self._open_markdown_window("Hilfe", "docs/help.md", self._help_text()))
@@ -478,7 +484,7 @@ class ControlExplorerApp(tk.Tk):
         notebook.add(tab_freq, text="Frequenz")
         notebook.add(tab_root_locus, text="Wurzelortskurve")
         notebook.add(tab_step, text="Sprung")
-        notebook.add(tab_disturbance, text="Stoerung")
+        notebook.add(tab_disturbance, text="Störung")
         notebook.add(tab_nyquist, text="Ortskurve")
 
         for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_nyquist):
@@ -497,7 +503,7 @@ class ControlExplorerApp(tk.Tk):
         button_frame.columnconfigure(0, weight=1)
         ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="w")
         ttk.Button(button_frame, text="Werkseinstellungen", command=self.reset_settings).grid(row=0, column=1, padx=6)
-        ttk.Button(button_frame, text="Schliessen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=2, sticky="e")
+        ttk.Button(button_frame, text="Schließen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=2, sticky="e")
 
     def _close_settings_window(self, dialog):
         if dialog.winfo_exists():
@@ -518,9 +524,6 @@ class ControlExplorerApp(tk.Tk):
             variable=self.grid_var,
             command=self.schedule_update,
         ).grid(row=1, column=0, sticky="w", pady=3)
-        ttk.Button(parent, text="SISO Tool öffnen", command=self.open_sisotool).grid(
-            row=2, column=0, sticky="w", pady=(12, 0)
-        )
 
     def _create_frequency_settings(self, parent):
         range_box = ttk.LabelFrame(parent, text="Berechnungsbereich der Ortskurve")
@@ -548,7 +551,7 @@ class ControlExplorerApp(tk.Tk):
         ).grid(row=0, column=1, sticky="ew")
         ttk.Label(
             bode_box,
-            text="Die Grenzen werden in der gewaehlten Einheit interpretiert.",
+            text="Die Grenzen werden in der gewählten Einheit interpretiert.",
             foreground="#555555",
         ).grid(row=3, column=0, sticky="w", padx=6, pady=(2, 6))
 
@@ -562,13 +565,13 @@ class ControlExplorerApp(tk.Tk):
         self._add_entry(parent, "t_max", self.t_max_var, 0, 0)
         self._add_entry(parent, "Punkte", self.t_points_var, 1, 0)
         self._add_entry(parent, "Sprungfaktor A", self.step_amplitude_var, 2, 0)
-        self._add_entry(parent, "Pade-Ordnung", self.pade_order_var, 3, 0)
+        self._add_entry(parent, "Padé-Ordnung", self.pade_order_var, 3, 0)
         ttk.Label(
             parent,
             text=(
-                "Die Pade-Ordnung ersetzt die Totzeit fuer Zeitbereich und SISO Tool durch eine rationale Naeherung. "
-                "Kleine Werte rechnen schneller, bilden die Totzeit aber grober ab. Groessere Werte sind im relevanten "
-                "Frequenzbereich genauer, erhoehen jedoch Systemordnung, Rechenzeit und das Risiko numerischer Probleme. "
+                "Die Padé-Ordnung ersetzt die Totzeit im Zeitbereich durch eine rationale Näherung. "
+                "Kleine Werte rechnen schneller, bilden die Totzeit aber grober ab. Größere Werte sind im relevanten "
+                "Frequenzbereich genauer, erhöhen jedoch Systemordnung, Rechenzeit und das Risiko numerischer Probleme. "
                 "Werte zwischen 3 und 8 sind meist ein sinnvoller Ausgangspunkt."
             ),
             wraplength=460,
@@ -577,26 +580,38 @@ class ControlExplorerApp(tk.Tk):
         ).grid(row=4, column=0, sticky="w", padx=6, pady=(10, 0))
 
     def _create_disturbance_settings(self, parent):
-        signal_box = ttk.LabelFrame(parent, text="Stoersignal")
+        signal_box = ttk.LabelFrame(parent, text="Störsignal")
         signal_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         signal_box.columnconfigure(0, weight=1)
-        self._add_entry(signal_box, "Amplitude d0 [V]", self.disturbance_amplitude_var, 0, 0)
-        self._add_entry(signal_box, "Startzeit t_d [s]", self.disturbance_time_var, 1, 0)
-        self._add_entry(signal_box, "Endzeit t_e [s]", self.disturbance_end_time_var, 2, 0)
-        self._add_entry(signal_box, "Ausregel-Toleranz [%]", self.disturbance_settling_tolerance_var, 3, 0)
+        location_frame = ttk.Frame(signal_box)
+        location_frame.grid(row=0, column=0, sticky="ew", padx=6, pady=3)
+        location_frame.columnconfigure(1, weight=1)
+        ttk.Label(location_frame, text="Störort").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        location_combo = ttk.Combobox(
+            location_frame,
+            textvariable=self.disturbance_location_var,
+            values=[self.DISTURBANCE_INPUT, self.DISTURBANCE_OUTPUT],
+            state="readonly",
+        )
+        location_combo.grid(row=0, column=1, sticky="ew")
+        location_combo.bind("<<ComboboxSelected>>", lambda _event: self.schedule_update())
+        self._add_entry(signal_box, "Amplitude d_0 [V]", self.disturbance_amplitude_var, 1, 0)
+        self._add_entry(signal_box, "Startzeit t_d [s]", self.disturbance_time_var, 2, 0)
+        self._add_entry(signal_box, "Endzeit t_e [s]", self.disturbance_end_time_var, 3, 0)
+        self._add_entry(signal_box, "Ausregel-Toleranz [%]", self.disturbance_settling_tolerance_var, 4, 0)
 
         display_box = ttk.LabelFrame(parent, text="Darstellung")
         display_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         display_box.columnconfigure(0, weight=1)
         ttk.Checkbutton(
             display_box,
-            text="Fuehrungsanteil y_w(t) anzeigen",
+            text="Führungsanteil y_w(t) anzeigen",
             variable=self.disturbance_show_reference_component_var,
             command=self.schedule_update,
         ).grid(row=0, column=0, sticky="w", padx=6, pady=3)
         ttk.Checkbutton(
             display_box,
-            text="Stoeranteil y_d(t) anzeigen",
+            text="Störanteil anzeigen",
             variable=self.disturbance_show_disturbance_component_var,
             command=self.schedule_update,
         ).grid(row=1, column=0, sticky="w", padx=6, pady=3)
@@ -604,9 +619,9 @@ class ControlExplorerApp(tk.Tk):
         ttk.Label(
             parent,
             text=(
-                "Die Stoerung greift additiv am Streckeneingang an. "
-                "Der Fuehrungssprung w(t) nutzt den Sprungfaktor A aus dem Reiter Sprung. "
-                "Leere Endzeit bedeutet: Stoerung bleibt bis zum Simulationsende aktiv."
+                "Die Störung kann als d_u additiv am Streckeneingang oder als d_y additiv am Streckenausgang wirken. "
+                "Der Führungssprung w(t) nutzt den Sprungfaktor A aus dem Reiter Sprung. "
+                "Leere Endzeit bedeutet: Die Störung bleibt bis zum Simulationsende aktiv."
             ),
             wraplength=460,
             justify="left",
@@ -614,7 +629,7 @@ class ControlExplorerApp(tk.Tk):
         ).grid(row=2, column=0, sticky="w", padx=6)
 
     def _create_root_locus_settings(self, parent):
-        gain_box = ttk.LabelFrame(parent, text="Zusatzverstaerkung K")
+        gain_box = ttk.LabelFrame(parent, text="Zusatzverstärkung K")
         gain_box.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         gain_box.columnconfigure(0, weight=1)
         self._add_entry(gain_box, "K min", self.root_locus_gain_min_var, 0, 0)
@@ -632,25 +647,25 @@ class ControlExplorerApp(tk.Tk):
         display_box.columnconfigure(0, weight=1)
         ttk.Checkbutton(
             display_box,
-            text="Totzeit mit Pade-Approximation beruecksichtigen",
+            text="Totzeit mit Padé-Approximation berücksichtigen",
             variable=self.root_locus_include_delay_var,
             command=self.schedule_update,
         ).grid(row=0, column=0, sticky="w", padx=6, pady=3)
         ttk.Checkbutton(
             display_box,
-            text="gleiche Skalierung fuer Real- und Imaginaerachse",
+            text="gleiche Skalierung für Real- und Imaginärachse",
             variable=self.root_locus_equal_axis_var,
             command=self.schedule_update,
         ).grid(row=1, column=0, sticky="w", padx=6, pady=3)
         ttk.Checkbutton(
             display_box,
-            text="Linien konstanten Daempfungsgrades anzeigen",
+            text="Linien konstanten Dämpfungsgrades anzeigen",
             variable=self.root_locus_show_damping_var,
             command=self.schedule_update,
         ).grid(row=2, column=0, sticky="w", padx=6, pady=3)
         self._add_entry(
             display_box,
-            "Daempfungsgrade zeta",
+            "Dämpfungsgrade zeta",
             self.root_locus_damping_ratios_var,
             3,
             0,
@@ -659,7 +674,7 @@ class ControlExplorerApp(tk.Tk):
             parent,
             text=(
                 "Gezeichnet werden die Pole von 1 + K L_0(s) = 0. "
-                "Bei Totzeit entstehen durch Pade zusaetzliche approximierte Pole und Nullstellen."
+                "Bei Totzeit entstehen durch Padé zusätzliche approximierte Pole und Nullstellen."
             ),
             wraplength=460,
             justify="left",
@@ -670,7 +685,7 @@ class ControlExplorerApp(tk.Tk):
         ttk.Checkbutton(parent, text="axis equal", variable=self.equal_axis_var, command=self.schedule_update).grid(row=0, column=0, sticky="w", pady=3)
         ttk.Label(
             parent,
-            text="Gleiche Skalierung: Eine Einheit auf Real- und Imaginaerachse wird gleich lang dargestellt; die Ortskurve wird nicht geometrisch verzerrt.",
+            text="Gleiche Skalierung: Eine Einheit auf Real- und Imaginärachse wird gleich lang dargestellt; die Ortskurve wird nicht geometrisch verzerrt.",
             wraplength=460,
             justify="left",
             foreground="#555555",
@@ -711,7 +726,7 @@ class ControlExplorerApp(tk.Tk):
         markdown = self._read_markdown_resource(markdown_path, fallback_markdown)
         self._render_markdown(text_widget, markdown)
 
-        ttk.Button(dialog, text="Schliessen", command=dialog.destroy).grid(
+        ttk.Button(dialog, text="Schließen", command=dialog.destroy).grid(
             row=1,
             column=0,
             sticky="e",
@@ -908,8 +923,8 @@ class ControlExplorerApp(tk.Tk):
         packages = [
             ("python-control", "control", "BSD-3-Clause"),
             ("Matplotlib", "matplotlib", "Matplotlib License"),
-            ("NumPy", "numpy", "BSD-3-Clause; binaere Wheels koennen OpenBLAS/LAPACK enthalten"),
-            ("SciPy", "scipy", "BSD-3-Clause; binaere Wheels koennen OpenBLAS/LAPACK enthalten"),
+            ("NumPy", "numpy", "BSD-3-Clause; binäre Wheels können OpenBLAS/LAPACK enthalten"),
+            ("SciPy", "scipy", "BSD-3-Clause; binäre Wheels können OpenBLAS/LAPACK enthalten"),
             ("Pillow", "Pillow", "HPND/Pillow License"),
             ("PyInstaller", "PyInstaller", "GPL-2.0-or-later mit Bootloader-Ausnahme (nur Build/Packaging)"),
         ]
@@ -920,8 +935,8 @@ class ControlExplorerApp(tk.Tk):
             )
         lines.append("")
         lines.append(
-            "Die vollstaendigen Lizenztexte der Drittkomponenten liegen in den jeweiligen "
-            "Python-Paketen bzw. Projektveroeffentlichungen. Beim Weitergeben eines gebauten "
+            "Die vollständigen Lizenztexte der Drittkomponenten liegen in den jeweiligen "
+            "Python-Paketen bzw. Projektveröffentlichungen. Beim Weitergeben eines gebauten "
             "Programmpakets sollten diese Lizenz- und Copyright-Hinweise mit ausgeliefert werden."
         )
         return "\n".join(lines)
@@ -934,14 +949,14 @@ class ControlExplorerApp(tk.Tk):
             "----------------------\n"
             f"Copyright (c) 2026 {self.COPYRIGHT_HOLDER}\n"
             "Projekt: Control Explorer\n"
-            "Zweck: Lehr- und Analysewerkzeug fuer SISO-Regelkreise im regelungstechnischen Praktikum.\n"
-            "Kontakt / dienstliche Anschrift: bitte vor externer Weitergabe mit der offiziellen Institutsangabe ergaenzen.\n\n"
+            "Zweck: Lehr- und Analysewerkzeug für SISO-Regelkreise im regelungstechnischen Praktikum.\n"
+            "Kontakt / dienstliche Anschrift: bitte vor externer Weitergabe mit der offiziellen Institutsangabe ergänzen.\n\n"
             "Lizenz\n"
             "------\n"
             f"Control Explorer steht unter der {self.APP_LICENSE}.\n"
-            "Kurzfassung: Nutzung, Kopieren, Veraendern und Weitergabe sind erlaubt, solange Lizenz- "
-            "und Copyright-Hinweise erhalten bleiben. Die Software wird ohne Gewaehrleistung bereitgestellt.\n"
-            "Massgeblich ist der vollstaendige Lizenztext in der Datei LICENSE.\n\n"
+            "Kurzfassung: Nutzung, Kopieren, Verändern und Weitergabe sind erlaubt, solange Lizenz- "
+            "und Copyright-Hinweise erhalten bleiben. Die Software wird ohne Gewährleistung bereitgestellt.\n"
+            "Maßgeblich ist der vollständige Lizenztext in der Datei LICENSE.\n\n"
             + self._third_party_notice_text()
         )
 
@@ -950,40 +965,41 @@ class ControlExplorerApp(tk.Tk):
             "Gebrauchsanweisung\n"
             "==================\n\n"
             "1. Grundmodell\n"
-            "Der Control Explorer geht von einem Standardregelkreis mit Einheitsrueckfuehrung aus. "
+            "Der Control Explorer geht von einem Standardregelkreis mit Einheitsrückführung aus. "
             "Links werden Parameter, optionaler Vorfilter V(s), Regler K(s), Strecke G(s) und Totzeit definiert. "
-            "Der offene Kreis fuer Nyquist, Bode und Wurzelortskurve ist L(s)=K(s)G(s). Der Vorfilter wirkt nur "
-            "auf die Fuehrungsgroesse w(t).\n\n"
+            "Der offene Kreis für Nyquist, Bode und Wurzelortskurve ist L(s)=K(s)G(s). Der Vorfilter wirkt nur "
+            "auf die Führungsgröße w(t).\n\n"
             "2. Eingaben\n"
             "Parameter werden im Parameterfeld als Python-Code definiert, zum Beispiel K_R = 2.0 oder T_t = 0.16. "
-            "Die Variable s ist bereits als TransferFunction.s vorbereitet. Uebertragungsfunktionen koennen daher "
-            "direkt als Ausdruecke wie K_R * (1 + 1/(T_I*s)) oder 1/(s**2 + 2*s + 1) eingegeben werden.\n\n"
+            "Die Variable s ist bereits als TransferFunction.s vorbereitet. Übertragungsfunktionen können daher "
+            "direkt als Ausdrücke wie K_R * (1 + 1/(T_I*s)) oder 1/(s**2 + 2*s + 1) eingegeben werden.\n\n"
             "3. Aktualisieren und Beispiele\n"
-            "Mit Aktualisieren werden alle Darstellungen neu berechnet. Beispiele koennen gespeichert und geladen "
+            "Mit Aktualisieren werden alle Darstellungen neu berechnet. Beispiele können gespeichert und geladen "
             "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner.\n\n"
             "4. Nyquist / Ortskurve\n"
-            "Der Tab zeigt wahlweise den offenen Kreis, die Fuehrungsuebertragung oder die Sensitivitaet. Fuer "
-            "Stabilitaetsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
-            "koennen in den Einstellungen ueber omega-Werte gesetzt werden.\n\n"
+            "Der Tab zeigt wahlweise den offenen Kreis, die Führungsübertragung oder die Sensitivität. Für "
+            "Stabilitätsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
+            "können in den Einstellungen über omega-Werte gesetzt werden.\n\n"
             "5. Frequenzgang / Bode\n"
             "Bode-Grenzen und Frequenzeinheit werden unter Einstellungen > Frequenz gesetzt. Die Totzeit wird im "
-            "Frequenzbereich exakt als exp(-j omega T) beruecksichtigt. Amplituden- und Phasenreserve koennen "
+            "Frequenzbereich exakt als exp(-j omega T) berücksichtigt. Amplituden- und Phasenreserve können "
             "eingeblendet werden.\n\n"
             "6. Wurzelortskurve\n"
-            "Die WOK basiert auf dem offenen Kreis ohne Vorfilter. Ein Klick auf die Kurve uebernimmt den passenden "
+            "Die WOK basiert auf dem offenen Kreis ohne Vorfilter. Ein Klick auf die Kurve übernimmt den passenden "
             "Gain in den Parametercode bzw. in den markierten Gain-Parameter. Mehrfachpole werden mit ihrer "
-            "Vielfachheit gekennzeichnet. Totzeit kann optional ueber Pade approximiert werden.\n\n"
+            "Vielfachheit gekennzeichnet. Totzeit kann optional über Padé approximiert werden.\n\n"
             "7. Sprungantwort\n"
-            "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Pade-Ordnung aus Einstellungen > Sprung. "
-            "Bei aktivem Vorfilter wird fuer die Fuehrungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
-            "8. Stoeraufschaltung\n"
-            "Die Stoerung greift additiv am Streckeneingang an. Amplitude, Startzeit, optionale Endzeit, Toleranz "
-            "und Komponentenanzeige liegen unter Einstellungen > Stoerung. Eine leere Endzeit bedeutet, dass die "
-            "Stoerung bis zum Simulationsende aktiv bleibt.\n\n"
+            "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Padé-Ordnung aus Einstellungen > Sprung. "
+            "Bei aktivem Vorfilter wird für die Führungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
+            "8. Störaufschaltung\n"
+            "Die Störung kann als d_u additiv am Streckeneingang oder als d_y additiv am Streckenausgang wirken. "
+            "Amplitude, Startzeit, optionale Endzeit, Toleranz "
+            "und Komponentenanzeige liegen unter Einstellungen > Störung. Eine leere Endzeit bedeutet, dass die "
+            "Störung bis zum Simulationsende aktiv bleibt.\n\n"
             "9. Grenzen und Didaktik\n"
-            "Der Explorer soll Rechnen und Visualisieren beschleunigen, ersetzt aber nicht das Verstaendnis. "
-            "Studierende sollten zu jeder Darstellung formulieren koennen, welcher Uebertragungspfad geplottet wird "
-            "und welche Annahmen gelten, besonders bei Totzeit, Pade-Approximation und Stabilitaetsreserven."
+            "Der Explorer soll Rechnen und Visualisieren beschleunigen, ersetzt aber nicht das Verständnis. "
+            "Studierende sollten zu jeder Darstellung formulieren können, welcher Übertragungspfad geplottet wird "
+            "und welche Annahmen gelten, besonders bei Totzeit, Padé-Approximation und Stabilitätsreserven."
         )
 
     def _create_layout(self):
@@ -993,7 +1009,7 @@ class ControlExplorerApp(tk.Tk):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         paned.grid(row=0, column=0, sticky="nsew")
 
-        left = ttk.Frame(paned, padding=8)
+        left = ttk.Frame(paned)
         right = ttk.Frame(paned, padding=6)
 
         paned.add(left, weight=0)
@@ -1008,13 +1024,104 @@ class ControlExplorerApp(tk.Tk):
 
     def _create_left_panel(self, parent):
         parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0, width=500)
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        content = ttk.Frame(canvas, padding=8)
+        content.columnconfigure(0, weight=1)
+        content_window = canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def update_scrollregion(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def update_content_width(event):
+            canvas.itemconfigure(content_window, width=event.width)
+
+        def on_mousewheel(event):
+            if getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-3, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(3, "units")
+            else:
+                canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        def bind_mousewheel(_event):
+            canvas.bind_all("<MouseWheel>", on_mousewheel)
+            canvas.bind_all("<Button-4>", on_mousewheel)
+            canvas.bind_all("<Button-5>", on_mousewheel)
+
+        def unbind_mousewheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        content.bind("<Configure>", update_scrollregion)
+        canvas.bind("<Configure>", update_content_width)
+        parent.bind("<Enter>", bind_mousewheel)
+        parent.bind("<Leave>", unbind_mousewheel)
+        canvas.bind("<Enter>", bind_mousewheel)
+        content.bind("<Enter>", bind_mousewheel)
+
+        self._create_left_panel_content(content)
+
+    def _create_left_panel_content(self, parent):
+        block_frame = ttk.LabelFrame(parent, text="Standardregelkreis")
+        block_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        block_frame.columnconfigure(0, weight=1)
+        self.fig_block = Figure(figsize=(4.8, 1.65), dpi=100)
+        self.ax_block = self.fig_block.add_subplot(111)
+        self.ax_block.axis("off")
+        self.canvas_block = FigureCanvasTkAgg(self.fig_block, master=block_frame)
+        self.canvas_block.get_tk_widget().grid(row=0, column=0, sticky="ew")
 
         title = ttk.Label(parent, text="Eingaben", font=("Segoe UI", 12, "bold"))
-        title.grid(row=0, column=0, sticky="w", pady=(0, 8))
+        title.grid(row=1, column=0, sticky="w", pady=(0, 8))
 
-        ttk.Label(parent, text="Parametercode").grid(row=1, column=0, sticky="w")
+        ttk.Label(parent, text="Strecke G(s)").grid(row=2, column=0, sticky="w")
+        self.plant_text = ScrolledText(parent, height=3, width=48, wrap=tk.WORD)
+        self.plant_text.grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        self.plant_text.insert("1.0", "1 / (s**3 + 3*s**2 + 3*s + 1)")
+        self.system_text = self.plant_text
+
+        controller_header = ttk.Frame(parent)
+        controller_header.grid(row=4, column=0, sticky="ew")
+        ttk.Checkbutton(
+            controller_header,
+            text="Regler K(s) aktiv",
+            variable=self.controller_enabled_var,
+            command=self.schedule_update,
+        ).pack(side=tk.LEFT)
+        self.controller_text = ScrolledText(parent, height=2, width=48, wrap=tk.WORD)
+        self.controller_text.grid(row=5, column=0, sticky="ew", pady=(2, 6))
+        self.controller_text.insert("1.0", "K_R")
+
+        prefilter_header = ttk.Frame(parent)
+        prefilter_header.grid(row=6, column=0, sticky="ew")
+        ttk.Checkbutton(
+            prefilter_header,
+            text="Vorfilter V(s) aktiv",
+            variable=self.prefilter_enabled_var,
+            command=self.schedule_update,
+        ).pack(side=tk.LEFT)
+        self.prefilter_text = ScrolledText(parent, height=2, width=48, wrap=tk.WORD)
+        self.prefilter_text.grid(row=7, column=0, sticky="ew", pady=(2, 6))
+        self.prefilter_text.insert("1.0", "1")
+
+        delay_frame = ttk.Frame(parent)
+        delay_frame.grid(row=8, column=0, sticky="ew", pady=(0, 8))
+        delay_frame.columnconfigure(1, weight=1)
+        ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.delay_var = tk.StringVar(value="T_t")
+        ttk.Entry(delay_frame, textvariable=self.delay_var).grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(parent, text="Parametercode").grid(row=9, column=0, sticky="w")
         self.params_text = ScrolledText(parent, height=5, width=48, wrap=tk.NONE)
-        self.params_text.grid(row=2, column=0, sticky="nsew", pady=(2, 8))
+        self.params_text.grid(row=10, column=0, sticky="ew", pady=(2, 8))
         self.params_text.insert(
             "1.0",
             "K_R = 2.0\n"
@@ -1025,52 +1132,6 @@ class ControlExplorerApp(tk.Tk):
             "# Kp = 1.5\n"
         )
 
-        block_frame = ttk.LabelFrame(parent, text="Standardregelkreis")
-        block_frame.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-        block_frame.columnconfigure(0, weight=1)
-        self.fig_block = Figure(figsize=(4.8, 1.65), dpi=100)
-        self.ax_block = self.fig_block.add_subplot(111)
-        self.ax_block.axis("off")
-        self.canvas_block = FigureCanvasTkAgg(self.fig_block, master=block_frame)
-        self.canvas_block.get_tk_widget().grid(row=0, column=0, sticky="ew")
-
-        prefilter_header = ttk.Frame(parent)
-        prefilter_header.grid(row=4, column=0, sticky="ew")
-        ttk.Checkbutton(
-            prefilter_header,
-            text="Vorfilter V(s) aktiv",
-            variable=self.prefilter_enabled_var,
-            command=self.schedule_update,
-        ).pack(side=tk.LEFT)
-        self.prefilter_text = ScrolledText(parent, height=2, width=48, wrap=tk.WORD)
-        self.prefilter_text.grid(row=5, column=0, sticky="nsew", pady=(2, 6))
-        self.prefilter_text.insert("1.0", "1")
-
-        controller_header = ttk.Frame(parent)
-        controller_header.grid(row=6, column=0, sticky="ew")
-        ttk.Checkbutton(
-            controller_header,
-            text="Regler K(s) aktiv",
-            variable=self.controller_enabled_var,
-            command=self.schedule_update,
-        ).pack(side=tk.LEFT)
-        self.controller_text = ScrolledText(parent, height=2, width=48, wrap=tk.WORD)
-        self.controller_text.grid(row=7, column=0, sticky="nsew", pady=(2, 6))
-        self.controller_text.insert("1.0", "K_R")
-
-        ttk.Label(parent, text="Strecke G(s)").grid(row=8, column=0, sticky="w")
-        self.plant_text = ScrolledText(parent, height=3, width=48, wrap=tk.WORD)
-        self.plant_text.grid(row=9, column=0, sticky="nsew", pady=(2, 8))
-        self.plant_text.insert("1.0", "1 / (s**3 + 3*s**2 + 3*s + 1)")
-        self.system_text = self.plant_text
-
-        delay_frame = ttk.Frame(parent)
-        delay_frame.grid(row=10, column=0, sticky="ew", pady=(0, 8))
-        delay_frame.columnconfigure(1, weight=1)
-        ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.delay_var = tk.StringVar(value="T_t")
-        ttk.Entry(delay_frame, textvariable=self.delay_var).grid(row=0, column=1, sticky="ew")
-
         ttk.Label(parent, text="Übertragungsfunktionen").grid(row=11, column=0, sticky="w")
         self.fig_latex = Figure(figsize=(4.8, 1.65), dpi=100)
         self.ax_latex = self.fig_latex.add_subplot(111)
@@ -1078,8 +1139,17 @@ class ControlExplorerApp(tk.Tk):
         self.canvas_latex = FigureCanvasTkAgg(self.fig_latex, master=parent)
         self.canvas_latex.get_tk_widget().grid(row=12, column=0, sticky="ew", pady=(0, 8))
 
+        self.current_example_label = ttk.Label(
+            parent,
+            textvariable=self.current_example_var,
+            foreground="#555555",
+            wraplength=460,
+            justify="left",
+        )
+        self.current_example_label.grid(row=13, column=0, sticky="ew", pady=(0, 6))
+
         button_frame = ttk.Frame(parent)
-        button_frame.grid(row=13, column=0, sticky="ew", pady=(4, 8))
+        button_frame.grid(row=14, column=0, sticky="ew", pady=(4, 8))
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
 
@@ -1091,14 +1161,14 @@ class ControlExplorerApp(tk.Tk):
         help_text = (
             "Eingabehinweise:\n"
             "- s ist als ct.TransferFunction.s definiert.\n"
-            "- Parameter koennen im oberen Feld definiert werden.\n"
-            "- Der offene Kreis ist K(s)G(s); V(s) wirkt nur auf die Fuehrung.\n"
+            "- Parameter können im Parameterfeld definiert werden.\n"
+            "- Der offene Kreis ist K(s)G(s); V(s) wirkt nur auf die Führung.\n"
             "- Frequenzplots nutzen die Totzeit exakt.\n"
-            "- Sprungantwort und Wurzelortskurve koennen Pade fuer die Totzeit nutzen.\n"
-            "- Ein Klick auf die Wurzelortskurve uebernimmt den Gain in den Parametercode.\n"
+            "- Sprungantwort und Wurzelortskurve können Padé für die Totzeit nutzen.\n"
+            "- Ein Klick auf die Wurzelortskurve übernimmt den Gain in den Parametercode.\n"
             "- Frequenzbereich, Sprungantwort und Optionen liegen im Einstellungsfenster."
         )
-        ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=14, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(parent, text=help_text, justify="left", foreground="#555555").grid(row=15, column=0, sticky="w", pady=(4, 0))
 
     def _create_tab_plot_system_selector(self, parent, variable, hint_text=None):
         """
@@ -1202,7 +1272,7 @@ class ControlExplorerApp(tk.Tk):
         )
         ttk.Label(
             root_locus_options,
-            text="WOK-Linie anklicken oder Wert eingeben und Enter druecken",
+            text="WOK-Linie anklicken oder Wert eingeben und Enter drücken",
             foreground="#555555",
         ).pack(side=tk.LEFT, padx=(10, 0))
 
@@ -1216,13 +1286,13 @@ class ControlExplorerApp(tk.Tk):
         disturbance_options.pack(side=tk.TOP, fill=tk.X)
         self.disturbance_summary_label = ttk.Label(
             disturbance_options,
-            text="Stoerung additiv am Streckeneingang; Parameter unter Einstellungen > Stoerung.",
+            text="Störung d_u oder d_y; Parameter unter Einstellungen > Störung.",
             foreground="#555555",
         )
         self.disturbance_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(
             disturbance_options,
-            text="Stoerung einstellen...",
+            text="Störung einstellen...",
             command=self._open_settings_window,
         ).pack(side=tk.RIGHT)
 
@@ -1307,7 +1377,7 @@ class ControlExplorerApp(tk.Tk):
         self.params_text.insert("1.0", updated_params)
         self.root_locus_gain_parameter_var.set(parameter_name)
         self.root_locus_marker_gain_var.set(value_text)
-        self.status_var.set(f"WOK: {parameter_name} = {value_text} ausgewaehlt.")
+        self.status_var.set(f"WOK: {parameter_name} = {value_text} ausgewählt.")
         self.after_idle(self.update_plots)
 
     def _commit_root_locus_marker_entry(self, _event=None):
@@ -1691,7 +1761,7 @@ class ControlExplorerApp(tk.Tk):
         muted_color = "#8a8a8a"
         block_edge = "#444444"
         block_inactive = "#f0f0f0"
-        block_width = 0.12
+        block_width = 0.105
         block_height = 0.12
         sum_marker_size = 150
         sum_marker_radius_pts = float(np.sqrt(sum_marker_size / np.pi))
@@ -1779,19 +1849,21 @@ class ControlExplorerApp(tk.Tk):
 
         y_main = 0.64
         y_feedback = 0.27
-        x_v = 0.15
-        x_sum_e = 0.31
-        x_k = 0.46
-        x_sum_d = 0.60
-        x_g = 0.76
-        x_out = 0.95
+        x_v = 0.12
+        x_sum_e = 0.26
+        x_k = 0.40
+        x_sum_du = 0.54
+        x_g = 0.68
+        x_sum_dy = 0.82
+        x_out = 0.97
         delta_arrow = 0.005
 
         add_block((x_v, y_main), "V(s)" if data["prefilter_enabled"] else "V=1", data["prefilter_enabled"])
         add_sum((x_sum_e, y_main), sign="-", sign_pos="bottom")
         add_block((x_k, y_main), "K(s)" if data["controller_enabled"] else "K=1", data["controller_enabled"])
-        add_sum((x_sum_d, y_main), sign="+", sign_pos="top")
+        add_sum((x_sum_du, y_main), sign="+", sign_pos="top")
         add_block((x_g, y_main), "G(s)", True)
+        add_sum((x_sum_dy, y_main), sign="+", sign_pos="top")
 
         add_arrow((0.04, y_main), (x_v - block_width / 2, y_main), "$w$", text_offset=(-0.01, 0.06))
         add_arrow(
@@ -1808,28 +1880,47 @@ class ControlExplorerApp(tk.Tk):
         )
         add_arrow(
             (x_k + block_width / 2, y_main),
-            (x_sum_d + delta_arrow, y_main),
+            (x_sum_du + delta_arrow, y_main),
             "$u_R$",
             text_offset=(-0.01, 0.05),
             shrink_b=sum_marker_radius_pts,
         )
         add_arrow(
-            (x_sum_d, y_main),
+            (x_sum_du, y_main),
             (x_g - block_width / 2, y_main),
             "$u$",
             text_offset=(0.0, 0.06),
             shrink_a=sum_marker_radius_pts,
         )
-        add_arrow((x_g + block_width / 2, y_main), (x_out, y_main), "$y$", text_offset=(0.0, 0.05))
         add_arrow(
-            (x_sum_d, 0.92),
-            (x_sum_d, y_main - delta_arrow),
-            "$d$",
+            (x_g + block_width / 2, y_main),
+            (x_sum_dy + delta_arrow, y_main),
+            shrink_b=sum_marker_radius_pts,
+        )
+        add_arrow(
+            (x_sum_dy, y_main),
+            (x_out, y_main),
+            "$y$",
+            text_offset=(0.0, 0.05),
+            shrink_a=sum_marker_radius_pts,
+        )
+        add_arrow(
+            (x_sum_du, 0.92),
+            (x_sum_du, y_main - delta_arrow),
+            r"$d_u$",
+            text_offset=(0.026, 0.06),
+            shrink_b=sum_marker_radius_pts,
+        )
+        add_arrow(
+            (x_sum_dy, 0.92),
+            (x_sum_dy, y_main - delta_arrow),
+            r"$d_y$",
             text_offset=(0.018, 0.06),
             shrink_b=sum_marker_radius_pts,
         )
 
-        ax.plot([0.90, 0.90, x_sum_e], [y_main, y_feedback, y_feedback], color=signal_color, linewidth=1.1)
+        x_feedback = 0.92
+        ax.plot([x_feedback, x_feedback, x_sum_e], [y_main, y_feedback, y_feedback], color=signal_color, linewidth=1.1)
         add_arrow(
             (x_sum_e, y_feedback),
             (x_sum_e, y_main + delta_arrow),
@@ -1841,7 +1932,7 @@ class ControlExplorerApp(tk.Tk):
         # ax.text(
         #     0.02,
         #     0.05,
-        #     "Einheitsrueckfuehrung, Stoerung additiv am Streckeneingang",
+        #     "Einheitsrückführung, Störung d_u additiv am Streckeneingang, Störung d_y additiv am Ausgang",
         #     ha="left",
         #     va="bottom",
         #     fontsize=7.5,
@@ -2269,6 +2360,10 @@ class ControlExplorerApp(tk.Tk):
         disturbance_end_time = None
         if disturbance_end_time_expr:
             disturbance_end_time = float(eval(disturbance_end_time_expr, env, env))
+        disturbance_location = self.disturbance_location_var.get()
+        if disturbance_location not in (self.DISTURBANCE_INPUT, self.DISTURBANCE_OUTPUT):
+            disturbance_location = self.DISTURBANCE_INPUT
+            self.disturbance_location_var.set(disturbance_location)
         disturbance_settling_tolerance = float(eval(self.disturbance_settling_tolerance_var.get(), env, env))
 
         pade_order = int(float(eval(self.pade_order_var.get(), env, env)))
@@ -2280,14 +2375,14 @@ class ControlExplorerApp(tk.Tk):
         if self.bode_frequency_unit_var.get() not in (self.BODE_UNIT_OMEGA, self.BODE_UNIT_HZ):
             raise ValueError("Unbekannte Bode-Frequenzeinheit.")
         if bode_frequency_min <= 0 or bode_frequency_max <= bode_frequency_min:
-            raise ValueError("Die Bode-Grenzen muessen 0 < links < rechts erfuellen.")
+            raise ValueError("Die Bode-Grenzen müssen 0 < links < rechts erfüllen.")
         gain_values = [root_locus_gain_min, root_locus_gain_max, root_locus_marker_gain]
         if not np.all(np.isfinite(gain_values)):
-            raise ValueError("Die Verstaerkungswerte der Wurzelortskurve muessen endlich sein.")
+            raise ValueError("Die Verstärkungswerte der Wurzelortskurve müssen endlich sein.")
         if root_locus_gain_min < 0 or root_locus_gain_max <= root_locus_gain_min:
-            raise ValueError("Fuer die Wurzelortskurve muss 0 <= K min < K max gelten.")
+            raise ValueError("Für die Wurzelortskurve muss 0 <= K min < K max gelten.")
         if root_locus_points < 10:
-            raise ValueError("Die Wurzelortskurve benoetigt mindestens 10 Verstaerkungspunkte.")
+            raise ValueError("Die Wurzelortskurve benötigt mindestens 10 Verstärkungspunkte.")
         if not root_locus_gain_min <= root_locus_marker_gain <= root_locus_gain_max:
             raise ValueError("Der markierte Wert K muss zwischen K min und K max liegen.")
         if t_max <= 0:
@@ -2304,7 +2399,7 @@ class ControlExplorerApp(tk.Tk):
             if not np.isfinite(disturbance_end_time):
                 raise ValueError("Das Störende muss eine endliche Zahl sein.")
             if disturbance_end_time <= disturbance_time or disturbance_end_time > t_max:
-                raise ValueError("Das Störende muss t_d < t_e <= t_max erfuellen.")
+                raise ValueError("Das Störende muss t_d < t_e <= t_max erfüllen.")
         if not np.isfinite(disturbance_settling_tolerance) or disturbance_settling_tolerance <= 0:
             raise ValueError("Die Ausregel-Toleranz der Störung muss eine positive endliche Prozentzahl sein.")
         if pade_order < 0:
@@ -2366,6 +2461,7 @@ class ControlExplorerApp(tk.Tk):
             "disturbance_amplitude": disturbance_amplitude,
             "disturbance_time": disturbance_time,
             "disturbance_end_time": disturbance_end_time,
+            "disturbance_location": disturbance_location,
             "disturbance_settling_tolerance": disturbance_settling_tolerance,
             "disturbance_show_reference_component": self.disturbance_show_reference_component_var.get(),
             "disturbance_show_disturbance_component": self.disturbance_show_disturbance_component_var.get(),
@@ -2424,7 +2520,7 @@ class ControlExplorerApp(tk.Tk):
                 continue
             value = float(eval(part, env, env))
             if not 0.0 < value < 1.0:
-                raise ValueError("Daempfungsgrade fuer die Wurzelortskurve muessen zwischen 0 und 1 liegen.")
+                raise ValueError("Dämpfungsgrade für die Wurzelortskurve müssen zwischen 0 und 1 liegen.")
             ratios.append(value)
         return sorted(set(ratios))
 
@@ -2439,7 +2535,7 @@ class ControlExplorerApp(tk.Tk):
             evaluation_omega = omega[omega != 0.0]
             if evaluation_omega.size == 0:
                 raise ValueError(
-                    "Der Frequenzbereich enthaelt fuer ein System mit Pol im Ursprung "
+                    "Der Frequenzbereich enthält für ein System mit Pol im Ursprung "
                     "keinen von null verschiedenen Frequenzpunkt."
                 )
 
@@ -2491,9 +2587,9 @@ class ControlExplorerApp(tk.Tk):
         """
         Bestimmt die Anzahl der Netto-Integratoren im offenen Kreis.
 
-        Ein I-Anteil entspricht einem Pol im Ursprung. Falls im Zaehler ebenfalls
+        Ein I-Anteil entspricht einem Pol im Ursprung. Falls im Zähler ebenfalls
         Nullstellen im Ursprung liegen, werden diese als algebraische Kuerzung
-        beruecksichtigt. Rueckgabe ist daher die Netto-Anzahl der Faktoren 1/s.
+        berücksichtigt. Rückgabe ist daher die Netto-Anzahl der Faktoren 1/s.
         """
         try:
             num, den = self._tf_num_den_arrays(sys_rational)
@@ -2532,9 +2628,9 @@ class ControlExplorerApp(tk.Tk):
 
     def _rational_high_frequency_limit(self, sys_rational):
         """
-        Grenzwert des rationalen Anteils fuer s -> infinity.
+        Grenzwert des rationalen Anteils für s -> infinity.
 
-        Rueckgabe:
+        Rückgabe:
         - complex value: endlicher Grenzwert
         - np.inf: Betrag divergiert
         """
@@ -2562,7 +2658,7 @@ class ControlExplorerApp(tk.Tk):
 
     def _frequency_limit_summary(self, sys_rational, delay):
         """
-        Bestimmt die Grenzwerte fuer omega -> infinity soweit eindeutig.
+        Bestimmt die Grenzwerte für omega -> infinity soweit eindeutig.
         """
         rational_limit = self._rational_high_frequency_limit(sys_rational)
 
@@ -2623,11 +2719,11 @@ class ControlExplorerApp(tk.Tk):
             return f"{value.real:.6g}"
         return f"{value.real:.6g} {value.imag:+.6g}j"
 
-    def _pade_delay_tf(self, delay, pade_order, label="Pade"):
+    def _pade_delay_tf(self, delay, pade_order, label="Padé"):
         if delay > 0 and pade_order > 0:
             num_delay, den_delay = self._call_control(label, ct.pade, delay, pade_order)
-            return self._call_control("tf fuer Pade-Totzeit", ct.tf, num_delay, den_delay)
-        return self._call_control("tf fuer Eins", ct.tf, [1], [1])
+            return self._call_control("tf für Padé-Totzeit", ct.tf, num_delay, den_delay)
+        return self._call_control("tf für Eins", ct.tf, [1], [1])
 
     def _time_domain_system_with_pade(self, data, selected):
         selected = self._normalize_system_selection(selected)
@@ -2637,37 +2733,39 @@ class ControlExplorerApp(tk.Tk):
         if selected == self.SYSTEM_OPEN:
             return L_time
         if selected == self.SYSTEM_CLOSED:
-            closed = self._call_control("feedback fuer G(s)", ct.feedback, L_time, 1)
+            closed = self._call_control("feedback für G(s)", ct.feedback, L_time, 1)
             return data["prefilter"] * closed
         if selected == self.SYSTEM_SENS:
-            one = self._call_control("tf fuer Sensitivitaet", ct.tf, [1], [1])
-            return self._call_control("feedback fuer S(s)", ct.feedback, one, L_time)
+            one = self._call_control("tf für Sensitivität", ct.tf, [1], [1])
+            return self._call_control("feedback für S(s)", ct.feedback, one, L_time)
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
     def _disturbance_time_models(self, data):
-        delay_tf = self._pade_delay_tf(data["delay"], data["pade_order"], label="pade fuer Stoerung")
+        delay_tf = self._pade_delay_tf(data["delay"], data["pade_order"], label="Padé für Störung")
         plant_time = data["plant"] * delay_tf
         controller_time = data["controller"]
         prefilter_time = data["prefilter"]
         L_time = controller_time * plant_time
-        one = self._call_control("tf fuer Stoerpfad", ct.tf, [1], [1])
+        one = self._call_control("tf für Störpfad", ct.tf, [1], [1])
+        sensitivity = self._call_control("feedback für Störsensitivität", ct.feedback, one, L_time)
+        y_from_w = prefilter_time * self._call_control("feedback Y/W", ct.feedback, L_time, 1)
+        y_from_du = self._call_control("feedback Y/D_u", ct.feedback, plant_time, controller_time)
+        y_from_dy = sensitivity
+        ur_from_w = controller_time * prefilter_time * sensitivity
+        ur_from_du = -controller_time * plant_time * sensitivity
+        ur_from_dy = -controller_time * sensitivity
+        u_from_du = sensitivity
+        u_from_dy = ur_from_dy
 
         return {
-            "y_from_w": prefilter_time * self._call_control("feedback Y/W", ct.feedback, L_time, 1),
-            "y_from_d": self._call_control("feedback Y/D", ct.feedback, plant_time, controller_time),
-            "ur_from_w": controller_time * prefilter_time * self._call_control(
-                "feedback U_R/W",
-                ct.feedback,
-                one,
-                L_time,
-            ),
-            "ur_from_d": -controller_time * plant_time * self._call_control(
-                "feedback U_R/D",
-                ct.feedback,
-                one,
-                L_time,
-            ),
-            "u_from_d": self._call_control("feedback U/D", ct.feedback, one, L_time),
+            "y_from_w": y_from_w,
+            "y_from_du": y_from_du,
+            "y_from_dy": y_from_dy,
+            "ur_from_w": ur_from_w,
+            "ur_from_du": ur_from_du,
+            "ur_from_dy": ur_from_dy,
+            "u_from_du": u_from_du,
+            "u_from_dy": u_from_dy,
         }
 
     def _root_locus_system(self, sys_rational, delay, pade_order):
@@ -2675,78 +2773,23 @@ class ControlExplorerApp(tk.Tk):
             return sys_rational
         if pade_order <= 0:
             self._control_warnings.append(
-                "Wurzelortskurve: Totzeit wurde nicht beruecksichtigt, weil die Pade-Ordnung 0 ist."
+                "Wurzelortskurve: Totzeit wurde nicht berücksichtigt, weil die Padé-Ordnung 0 ist."
             )
             return sys_rational
 
         num_delay, den_delay = self._call_control(
-            "pade fuer Wurzelortskurve",
+            "Padé für Wurzelortskurve",
             ct.pade,
             delay,
             pade_order,
         )
         delay_tf = self._call_control(
-            "tf fuer Wurzelortskurven-Totzeit",
+            "tf für Wurzelortskurven-Totzeit",
             ct.tf,
             num_delay,
             den_delay,
         )
         return sys_rational * delay_tf
-
-    def open_sisotool(self):
-        if not hasattr(ct, "sisotool"):
-            messagebox.showinfo("SISO Tool", "Diese python-control-Version stellt ct.sisotool nicht bereit.")
-            return
-
-        proceed = messagebox.askokcancel(
-            "Externes Vergleichswerkzeug",
-            "Das SISO Tool ist ein separates Werkzeug aus python-control und nicht Teil "
-            "des Control Explorers. Es dient hier nur zum interaktiven Vergleich.\n\n"
-            "Aenderungen am Verstaerkungsfaktor im SISO Tool werden nicht in den "
-            "Control Explorer zurueckuebernommen. Eine vorhandene Totzeit wird dort "
-            "nur ueber die eingestellte Pade-Approximation beruecksichtigt.\n\n"
-            "SISO Tool jetzt oeffnen?",
-            icon=messagebox.WARNING,
-            parent=self,
-        )
-        if not proceed:
-            return
-
-        self._control_warnings = []
-        try:
-            data = self._parse_user_input()
-            sys_for_tool = data["root_locus_sys_rational"]
-
-            if data["delay"] > 0:
-                if data["pade_order"] <= 0:
-                    self._control_warnings.append(
-                        "sisotool: Totzeit wurde nicht beruecksichtigt, weil die Pade-Ordnung 0 ist."
-                    )
-                else:
-                    num_delay, den_delay = self._call_control("pade fuer sisotool", ct.pade, data["delay"], data["pade_order"])
-                    delay_tf = self._call_control("tf fuer sisotool-Totzeit", ct.tf, num_delay, den_delay)
-                    sys_for_tool = sys_for_tool * delay_tf
-
-            initial_gain = data["root_locus_marker_gain"]
-            if initial_gain is None:
-                initial_gain = 1.0
-
-            self._sisotool_result = self._call_control(
-                "sisotool",
-                ct.sisotool,
-                sys_for_tool,
-                initial_gain=initial_gain,
-                dB=True,
-                Hz=self.bode_frequency_unit_var.get() == self.BODE_UNIT_HZ,
-                deg=True,
-                omega_limits=[data["bode_x_min"], data["bode_x_max"]],
-                margins_bode=True,
-                tvect=data["t"],
-            )
-            plt.show(block=False)
-            self._show_control_warnings_if_needed()
-        except Exception as exc:
-            messagebox.showerror("SISO Tool", f"ct.sisotool konnte nicht gestartet werden:\n\n{exc}")
 
     # ------------------------------------------------------------------
     # Plotting
@@ -2784,7 +2827,7 @@ class ControlExplorerApp(tk.Tk):
         self._last_warning_text = warning_text
         messagebox.showwarning(
             "Warnung von python-control",
-            "python-control hat Warnungen ausgegeben. Die Ergebnisse koennen dadurch ungenau oder irrefuehrend sein:\n\n"
+            "python-control hat Warnungen ausgegeben. Die Ergebnisse können dadurch ungenau oder irreführend sein:\n\n"
             f"{warning_text}",
         )
 
@@ -2936,7 +2979,7 @@ class ControlExplorerApp(tk.Tk):
             )
 
         if self.show_critical_point_var.get() and self._is_open_loop_selection(selected) and not normalized:
-            # Der kritische Punkt -1 gehoert zur Nyquist-Ortskurve des offenen Kreises.
+            # Der kritische Punkt -1 gehört zur Nyquist-Ortskurve des offenen Kreises.
             # Wird die Kurve normiert, wird der kritische Punkt nicht angezeigt.
             critical_point = -1.0 / scale if normalized else -1.0
             critical_label = r"kritischer Punkt $-1$"
@@ -3501,7 +3544,7 @@ class ControlExplorerApp(tk.Tk):
         finite = np.isfinite(points.real) & np.isfinite(points.imag)
         points = points[finite]
         if not points.size:
-            raise ValueError("Die Wurzelortskurve enthaelt keine endlichen Punkte.")
+            raise ValueError("Die Wurzelortskurve enthält keine endlichen Punkte.")
 
         x_min = min(float(np.min(points.real)), 0.0)
         x_max = max(float(np.max(points.real)), 0.0)
@@ -3615,20 +3658,20 @@ class ControlExplorerApp(tk.Tk):
         if not self.root_locus_include_delay_var.get():
             return (
                 f"ACHTUNG: Totzeit T_t = {delay:.5g} s ist vorhanden, wird in der WOK "
-                "aber nicht beruecksichtigt. Aktivierung unter Einstellungen > Wurzelortskurve.",
+                "aber nicht berücksichtigt. Aktivierung unter Einstellungen > Wurzelortskurve.",
                 "#ffe5e5",
                 "#b22222",
             )
         if pade_order <= 0:
             return (
-                f"ACHTUNG: Totzeit T_t = {delay:.5g} s ist vorhanden, kann bei Pade-Ordnung 0 "
-                "aber nicht in der WOK beruecksichtigt werden.",
+                f"ACHTUNG: Totzeit T_t = {delay:.5g} s ist vorhanden, kann bei Padé-Ordnung 0 "
+                "aber nicht in der WOK berücksichtigt werden.",
                 "#ffe5e5",
                 "#b22222",
             )
         return (
-            f"WOK-Modell: Totzeit T_t = {delay:.5g} s wird mit Pade-Approximation "
-            f"der Ordnung {pade_order} beruecksichtigt.",
+            f"WOK-Modell: Totzeit T_t = {delay:.5g} s wird mit Padé-Approximation "
+            f"der Ordnung {pade_order} berücksichtigt.",
             "#fff4cc",
             "#9a6700",
         )
@@ -3651,7 +3694,7 @@ class ControlExplorerApp(tk.Tk):
         if loci.ndim != 2 or loci.shape[0] != locus_gains.size:
             raise ValueError("Die Wurzelortskurve konnte nicht als zweidimensionales Polraster berechnet werden.")
         if loci.shape[1] == 0:
-            raise ValueError("Fuer eine Wurzelortskurve muss der offene Kreis mindestens einen Pol besitzen.")
+            raise ValueError("Für eine Wurzelortskurve muss der offene Kreis mindestens einen Pol besitzen.")
         self._root_locus_click_data = {
             "loci": loci,
             "gains": locus_gains,
@@ -3727,11 +3770,11 @@ class ControlExplorerApp(tk.Tk):
                 offset=(7, -14),
             )
 
-        ax.axvline(0.0, color="black", linewidth=1.0, linestyle="--", label="Stabilitaetsgrenze")
+        ax.axvline(0.0, color="black", linewidth=1.0, linestyle="--", label="Stabilitätsgrenze")
         ax.axhline(0.0, color="#555555", linewidth=0.8)
         ax.set_xlabel(r"$\Re\{s\}$ [1/s]")
         ax.set_ylabel(r"$\Im\{s\}$ [1/s]")
-        ax.set_title(r"Wurzelortskurve fuer $1 + K L_0(s) = 0$")
+        ax.set_title(r"Wurzelortskurve für $1 + K L_0(s) = 0$")
         ax.grid(self.grid_var.get(), which="both")
         x_span, y_span = self._set_root_locus_limits(ax, loci, open_poles, open_zeros)
         self._draw_root_locus_damping_grid(ax)
@@ -3845,26 +3888,46 @@ class ControlExplorerApp(tk.Tk):
         if data["disturbance_end_time"] is not None:
             d_signal = np.where(t >= data["disturbance_end_time"], 0.0, d_signal)
 
-        y_w = self._forced_response_output("Stoerpfad Y/W", models["y_from_w"], t, w_signal)
-        y_d = self._forced_response_output("Stoerpfad Y/D", models["y_from_d"], t, d_signal)
+        is_output_disturbance = data["disturbance_location"] == self.DISTURBANCE_OUTPUT
+        disturbance_key = "dy" if is_output_disturbance else "du"
+        disturbance_symbol = r"d_y" if is_output_disturbance else r"d_u"
+        disturbance_location_text = "Streckenausgang" if is_output_disturbance else "Streckeneingang"
+
+        y_w = self._forced_response_output("Störpfad Y/W", models["y_from_w"], t, w_signal)
+        y_d = self._forced_response_output(
+            f"Störpfad Y/{disturbance_symbol}",
+            models[f"y_from_{disturbance_key}"],
+            t,
+            d_signal,
+        )
         y_total = y_w + y_d
 
-        ur_w = self._forced_response_output("Stoerpfad U_R/W", models["ur_from_w"], t, w_signal)
-        ur_d = self._forced_response_output("Stoerpfad U_R/D", models["ur_from_d"], t, d_signal)
+        ur_w = self._forced_response_output("Störpfad U_R/W", models["ur_from_w"], t, w_signal)
+        ur_d = self._forced_response_output(
+            f"Störpfad U_R/{disturbance_symbol}",
+            models[f"ur_from_{disturbance_key}"],
+            t,
+            d_signal,
+        )
         ur_total = ur_w + ur_d
-        u_disturbance = self._forced_response_output("Stoerpfad U/D", models["u_from_d"], t, d_signal)
+        u_disturbance = self._forced_response_output(
+            f"Störpfad U/{disturbance_symbol}",
+            models[f"u_from_{disturbance_key}"],
+            t,
+            d_signal,
+        )
         u_total = ur_w + u_disturbance
 
         ax_y.plot(t, y_total, linewidth=2, label=r"$y(t)$")
         if data["disturbance_show_reference_component"]:
-            ax_y.plot(t, y_w, linestyle="--", linewidth=1.2, label=r"Fuehrungsanteil $y_w$")
+            ax_y.plot(t, y_w, linestyle="--", linewidth=1.2, label=r"Führungsanteil $y_w$")
         if data["disturbance_show_disturbance_component"]:
-            ax_y.plot(t, y_d, linestyle=":", linewidth=1.2, label=r"Stoeranteil $y_d$")
+            ax_y.plot(t, y_d, linestyle=":", linewidth=1.2, label=rf"Störanteil $y_{{{disturbance_symbol}}}$")
         ax_y.axvline(data["disturbance_time"], color="black", linestyle=":", linewidth=1.0, label=r"$t_d$")
         if data["disturbance_end_time"] is not None:
             ax_y.axvline(data["disturbance_end_time"], color="#666666", linestyle="--", linewidth=1.0, label=r"$t_e$")
         ax_y.set_ylabel(r"$y(t)$ [V]")
-        ax_y.set_title("Stoeraufschaltung am Streckeneingang")
+        ax_y.set_title(rf"Störaufschaltung ${disturbance_symbol}$ am {disturbance_location_text}")
         ax_y.grid(self.grid_var.get(), which="both")
 
         final_value = float(y_total[-1])
@@ -3884,12 +3947,12 @@ class ControlExplorerApp(tk.Tk):
         if settling_time is None:
             settling_text = "Ausregelzeit: nicht im Simulationsfenster"
         else:
-            settling_text = f"Ausregelzeit nach Stoerung: {settling_time:.4g} s"
+            settling_text = f"Ausregelzeit nach Störung: {settling_time:.4g} s"
         steady_error = final_value - baseline_value
         ax_y.text(
             0.02,
             0.04,
-            settling_text + f"\nEndwertaenderung y: {steady_error:.4g} V",
+            settling_text + f"\nEndwertänderung y: {steady_error:.4g} V",
             transform=ax_y.transAxes,
             fontsize=8.5,
             va="bottom",
@@ -3898,7 +3961,7 @@ class ControlExplorerApp(tk.Tk):
         )
 
         ax_u.plot(t, ur_total, linewidth=1.8, label=r"Reglerausgang $u_R(t)$")
-        ax_u.plot(t, d_signal, linewidth=1.4, linestyle=":", label=r"Stoerung $d(t)$")
+        ax_u.plot(t, d_signal, linewidth=1.4, linestyle=":", label=rf"Störung ${disturbance_symbol}(t)$")
         ax_u.plot(t, u_total, linewidth=1.8, linestyle="--", label=r"Streckeneingang $u(t)$")
         ax_u.axvline(data["disturbance_time"], color="black", linestyle=":", linewidth=1.0)
         if data["disturbance_end_time"] is not None:
@@ -3923,11 +3986,11 @@ class ControlExplorerApp(tk.Tk):
             )
             self.disturbance_summary_label.configure(
                 text=(
-                    f"d0 = {data['disturbance_amplitude']:.6g} V, "
+                    f"{disturbance_symbol}0 = {data['disturbance_amplitude']:.6g} V, "
                     + f"t_d = {data['disturbance_time']:.6g} s, "
                     + end_text
                     + f"Toleranz = {data['disturbance_settling_tolerance']:.6g} %, "
-                    + "additiv am Streckeneingang"
+                    + f"additiv am {disturbance_location_text}"
                 )
             )
 
@@ -3967,7 +4030,7 @@ class ControlExplorerApp(tk.Tk):
 
     def _tf_num_den_arrays(self, sys_rational):
         """
-        Liefert die Zaehler-/Nennerkoeffizienten eines SISO-TransferFunction-Systems.
+        Liefert die Zähler-/Nennerkoeffizienten eines SISO-TransferFunction-Systems.
         Die Koeffizienten sind in absteigender Potenzreihenfolge.
         """
         sys_tf = ct.tf(sys_rational)
@@ -4005,13 +4068,13 @@ class ControlExplorerApp(tk.Tk):
             G0(s) = N(s)/D(s) * e^{-Ts}
             G(s)  = N(s)e^{-Ts} / (D(s) + N(s)e^{-Ts})
 
-        Fuer die Zeitbereichssimulation wird weiterhin separat die eingestellte
-        Pade-Approximation verwendet.
+        Für die Zeitbereichssimulation wird weiterhin separat die eingestellte
+        Padé-Approximation verwendet.
         """
         if delay <= 0:
             try:
                 closed_tf = self._call_control(
-                    "feedback fuer Latex-Vorschau",
+                    "feedback für Latex-Vorschau",
                     ct.feedback,
                     sys_rational,
                     1,
@@ -4162,9 +4225,11 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(root_locus_info)
         text_lines.append(f"Totzeit: {data['delay']:.8g} s")
         text_lines.append(f"Sprungfaktor w(t): {data['step_amplitude']:.8g}")
+        disturbance_symbol = "d_y" if data["disturbance_location"] == self.DISTURBANCE_OUTPUT else "d_u"
+        disturbance_location_text = "Streckenausgang" if disturbance_symbol == "d_y" else "Streckeneingang"
         text_lines.append(
-            f"Stoeraufschaltung: d(t) = {data['disturbance_amplitude']:.8g} ab "
-            + f"t = {data['disturbance_time']:.8g} s am Streckeneingang, "
+            f"Störaufschaltung: {disturbance_symbol}(t) = {data['disturbance_amplitude']:.8g} ab "
+            + f"t = {data['disturbance_time']:.8g} s am {disturbance_location_text}, "
             + (
                 f"bis t = {data['disturbance_end_time']:.8g} s, "
                 if data["disturbance_end_time"] is not None
@@ -4172,7 +4237,7 @@ class ControlExplorerApp(tk.Tk):
             )
             + f"Toleranz {data['disturbance_settling_tolerance']:.8g} %"
         )
-        text_lines.append(f"Pade-Ordnung fuer Zeitbereich und Wurzelortskurve: {data['pade_order']}")
+        text_lines.append(f"Padé-Ordnung für Zeitbereich und Wurzelortskurve: {data['pade_order']}")
         text_lines.append("")
 
         text_lines.append("Blockdefinitionen:")
@@ -4194,43 +4259,43 @@ class ControlExplorerApp(tk.Tk):
             reference_formula = rf"({self._transfer_function_to_latex(data['prefilter'])}) * {closed_formula}"
         else:
             reference_formula = closed_formula
-        text_lines.append("Exakte Uebertragungsfunktionen:")
+        text_lines.append("Exakte Übertragungsfunktionen:")
         text_lines.append(f"  L(s)       = {self._open_loop_latex(data['sys_rational'], data['delay'])}")
         text_lines.append(f"  Y(s)/W(s)  = {reference_formula}")
         text_lines.append("  Y(s)/D(s)  = G(s)/(1 + K(s)G(s))")
         if data["delay"] > 0:
             text_lines.append(
                 "  Hinweis: Wegen der Totzeit sind geschlossene Pfade nicht rational; "
-                "Zeitantwort und sisotool sowie optional die Wurzelortskurve verwenden die Pade-Naeherung."
+                "Zeitantwort und optional die Wurzelortskurve verwenden die Padé-Näherung."
             )
         text_lines.append("")
 
         text_lines.append("Kritischer Punkt:")
         if self._is_open_loop_selection(self.nyquist_plot_system_var.get()):
-            text_lines.append("  Fuer die Nyquist-Ortskurve des offenen Kreises ist der kritische Punkt -1 + 0j.")
+            text_lines.append("  Für die Nyquist-Ortskurve des offenen Kreises ist der kritische Punkt -1 + 0j.")
         else:
             text_lines.append(
-                "  Der Punkt -1 gehoert zur Nyquist-Ortskurve des offenen Kreises L(jw). "
+                "  Der Punkt -1 gehört zur Nyquist-Ortskurve des offenen Kreises L(jw). "
                 "Bei der Darstellung von Y/W oder S=1/(1+L) gibt es keinen entsprechenden endlichen "
                 "kritischen Punkt; L=-1 bildet sich auf eine Polstelle/Unendlichkeit ab."
             )
         text_lines.append("")
 
         integrator_order = self._count_origin_integrators(data["sys_rational"])
-        text_lines.append("I-Anteil und Stabilitaetsreserven:")
+        text_lines.append("I-Anteil und Stabilitätsreserven:")
         if integrator_order > 0:
             text_lines.append(f"  Netto-I-Anteil erkannt: {integrator_order} Pol(e) im Ursprung.")
             text_lines.append(
                 "  Die Phasenreserve wird weiterhin bei |L(jw_c)| = 1 als Abstand zur -180-Grad-Linie berechnet. "
                 "Wegen des Pols im Ursprung ist der offene Kreis nicht asymptotisch stabil; die Reserve ist "
-                "deshalb ein Entwurfs-/Robustheitsmass, aber kein alleiniger Stabilitaetsbeweis."
+                "deshalb ein Entwurfs-/Robustheitsmaß, aber kein alleiniger Stabilitätsbeweis."
             )
         else:
             text_lines.append("  Kein Netto-I-Anteil im rationalen offenen Kreis erkannt.")
         text_lines.append("")
 
         if omega is not None and L is not None and len(omega) > 0:
-            text_lines.append("Ausgewaehlte Werte des offenen Kreises L(j omega) mit exakter Totzeit:")
+            text_lines.append("Ausgewählte Werte des offenen Kreises L(j omega) mit exakter Totzeit:")
             for w_mark in data["markers"]:
                 idx = int(np.argmin(np.abs(omega - w_mark)))
                 val = L[idx]
@@ -4252,14 +4317,14 @@ class ControlExplorerApp(tk.Tk):
             )
 
         text_lines.append("")
-        text_lines.append("Grenzwerte fuer omega -> unendlich:")
+        text_lines.append("Grenzwerte für omega -> unendlich:")
         limits = self._frequency_limit_summary(data["sys_rational"], data["delay"])
         text_lines.append(f"  Offener Kreis L(jw): {limits['open']}")
-        text_lines.append(f"  Fuehrung ohne Vorfilter L/(1+L): {limits['closed']}")
-        text_lines.append(f"  Sensitivitaet S(jw)=1/(1+L): {limits['sensitivity']}")
+        text_lines.append(f"  Führung ohne Vorfilter L/(1+L): {limits['closed']}")
+        text_lines.append(f"  Sensitivität S(jw)=1/(1+L): {limits['sensitivity']}")
 
         text_lines.append("")
-        text_lines.append("Fuer die Sprungantwort verwendetes rationales System:")
+        text_lines.append("Für die Sprungantwort verwendetes rationales System:")
         text_lines.append(str(sys_time))
         text_lines.append("")
 
@@ -4276,8 +4341,8 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append("Hinweis:")
         text_lines.append(
             "Nyquist und Bode verwenden die Totzeit exakt im Frequenzbereich. "
-            "Sprungantwort, Stoeraufschaltung und optional die Wurzelortskurve verwenden "
-            "stattdessen die eingestellte Pade-Approximation."
+            "Sprungantwort, Störaufschaltung und optional die Wurzelortskurve verwenden "
+            "stattdessen die eingestellte Padé-Approximation."
         )
 
         self.info_text.configure(state=tk.NORMAL)
@@ -4322,6 +4387,11 @@ class ControlExplorerApp(tk.Tk):
             return False
         return True
 
+    def _set_current_example_path(self, filename):
+        path = Path(filename)
+        self.current_example_path = path
+        self.current_example_var.set(f"Aktuelles Beispiel: {path.name}\nPfad: {path}")
+
     def save_example(self):
         if not self._prepare_examples_directory():
             return
@@ -4339,6 +4409,7 @@ class ControlExplorerApp(tk.Tk):
         try:
             with Path(filename).open("w", encoding="utf-8") as handle:
                 json.dump(self._example_snapshot(), handle, indent=2, ensure_ascii=False)
+            self._set_current_example_path(filename)
             self.status_var.set(f"Beispiel gespeichert: {Path(filename).name}")
         except Exception as exc:
             messagebox.showerror("Beispiel speichern", f"Das Beispiel konnte nicht gespeichert werden:\n\n{exc}")
@@ -4377,6 +4448,7 @@ class ControlExplorerApp(tk.Tk):
                 self._apply_settings(settings)
                 self._save_settings()
 
+            self._set_current_example_path(filename)
             self.status_var.set(f"Beispiel geladen: {Path(filename).name}")
             self.update_plots()
         except Exception as exc:

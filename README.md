@@ -1,12 +1,12 @@
 # Control Explorer
 
-Desktop-GUI zur Untersuchung eines SISO-Standardregelkreises mit optionalem Vorfilter, getrennt definierbarem Regler `K(s)` und Strecke `G(s)`, Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort, Stoeraufschaltung und `python-control` SISO Tool.
+Desktop-GUI zur Untersuchung eines SISO-Standardregelkreises mit optionalem Vorfilter, getrennt definierbarem Regler `K(s)` und Strecke `G(s)`, Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und Störaufschaltung.
 
-Der linke Eingabebereich zeigt den Regelkreis als Blockdiagramm. Vorfilter und Regler koennen einzeln aktiviert oder deaktiviert werden; die Strecke bleibt das zentrale Anlagenmodell. Frequenz- und Stabilitaetsplots verwenden den offenen Kreis `L(s)=K(s)G(s)`, waehrend Sprungantwort und Fuehrungsfrequenzgang bei aktivem Vorfilter `Y(s)/W(s)=V(s)L(s)/(1+L(s))` auswerten.
+Der linke Eingabebereich zeigt den Regelkreis als Blockdiagramm. Vorfilter und Regler können einzeln aktiviert oder deaktiviert werden; die Strecke bleibt das zentrale Anlagenmodell. Frequenz- und Stabilitätsplots verwenden den offenen Kreis `L(s)=K(s)G(s)`, während Sprungantwort und Führungsfrequenzgang bei aktivem Vorfilter `Y(s)/W(s)=V(s)L(s)/(1+L(s))` auswerten.
 
-Der Tab `Stoeraufschaltung` simuliert eine additive Stoerung am Streckeneingang. Amplitude, Startzeit, Ausregel-Toleranz und Komponentenanzeige liegen unter `Einstellungen > Stoerung`. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Stoersignal `d(t)` und der resultierende Streckeneingang `u(t)` inklusive einer einfachen Ausregelzeit-Schaetzung nach dem Stoersprung.
+Der Tab `Störaufschaltung` simuliert eine additive Störung wahlweise als `d_u` am Streckeneingang oder als `d_y` am Streckenausgang. Amplitude, Startzeit, Ausregel-Toleranz, Störort und Komponentenanzeige liegen unter `Einstellungen > Störung`. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Störsignal und der resultierende Streckeneingang `u(t)` inklusive einer einfachen Ausregelzeit-Schätzung nach dem Störsprung.
 
-Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K L_0(s) = 0` fuer einen einstellbaren Verstaerkungsbereich, wobei `L_0(s)` der offene Kreis ohne den gerade markierten WOK-Gain ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole fuer den ausgewaehlten Gain, Stabilitaetsauswertung, Hover-Daten, Daempfungslinien und eine optionale Pade-Approximation der Totzeit sind integriert. Ein Modellhinweis zeigt direkt im Plot, ob eine vorhandene Totzeit ignoriert oder mit welcher Pade-Ordnung sie approximiert wird. Ein Klick auf die Wurzelortskurve uebernimmt den gewaehlten Gain in den erkannten Verstaerkungsparameter des Parametercodes und aktualisiert damit alle Darstellungen.
+Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K L_0(s) = 0` für einen einstellbaren Verstärkungsbereich, wobei `L_0(s)` der offene Kreis ohne den gerade markierten WOK-Gain ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole für den ausgewählten Gain, Stabilitätsauswertung, Hover-Daten, Dämpfungslinien und eine optionale Padé-Approximation der Totzeit sind integriert. Ein Modellhinweis zeigt direkt im Plot, ob eine vorhandene Totzeit ignoriert oder mit welcher Padé-Ordnung sie approximiert wird. Ein Klick auf die Wurzelortskurve übernimmt den gewählten Gain in den erkannten Verstärkungsparameter des Parametercodes und aktualisiert damit alle Darstellungen.
 
 ## Direkt aus Python starten
 
@@ -14,7 +14,7 @@ Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K L_0(s) = 0` fuer ein
 python control_explorer_gui.py
 ```
 
-Benoetigte Laufzeitpakete stehen in `requirements-build.txt`. PyInstaller wird nur fuer das Erzeugen der eigenstaendigen Windows- oder Linux-Anwendung benoetigt.
+Benötigte Laufzeitpakete stehen in `requirements-build.txt`. PyInstaller wird nur für das Erzeugen der eigenständigen Windows- oder Linux-Anwendung benötigt.
 
 ## Windows-Anwendung bauen
 
@@ -22,9 +22,9 @@ Voraussetzungen auf dem Build-Rechner:
 
 - Windows 10 oder 11
 - Python 3.13
-- Internetzugang fuer die einmalige Installation der Build-Pakete
+- Internetzugang für die einmalige Installation der Build-Pakete
 
-Im Projektverzeichnis ausfuehren:
+Im Projektverzeichnis ausführen:
 
 ```powershell
 PowerShell -ExecutionPolicy Bypass -File .\build_windows.ps1
@@ -33,7 +33,7 @@ PowerShell -ExecutionPolicy Bypass -File .\build_windows.ps1
 Das Skript:
 
 1. erstellt die isolierte Umgebung `.venv-build`,
-2. installiert die festgelegten Abhaengigkeiten,
+2. installiert die festgelegten Abhängigkeiten,
 3. baut die Anwendung mit PyInstaller,
 4. schreibt das Ergebnis nach `dist\ControlExplorer`.
 
@@ -50,8 +50,8 @@ Zum Verteilen muss der **gesamte Ordner** `dist\ControlExplorer` als ZIP-Datei w
 Voraussetzungen auf dem Build-Rechner:
 
 - Linux-System mit Python 3.12 oder kompatibler Python-Version
-- `python3-venv` fuer virtuelle Umgebungen
-- Internetzugang fuer die einmalige Installation der Build-Pakete
+- `python3-venv` für virtuelle Umgebungen
+- Internetzugang für die einmalige Installation der Build-Pakete
 
 Falls `python3-venv` noch fehlt, kann es unter Ubuntu/Debian zum Beispiel so installiert werden:
 
@@ -88,7 +88,7 @@ python -m PyInstaller --noconfirm --clean --onedir \
   control_explorer_gui.py
 ```
 
-Die fertige Linux-Anwendung liegt anschliessend unter:
+Die fertige Linux-Anwendung liegt anschließend unter:
 
 ```text
 dist/ControlExplorer/ControlExplorer
@@ -102,9 +102,9 @@ Gestartet wird sie aus dem Projektverzeichnis mit:
 
 Zum Verteilen muss der **gesamte Ordner** `dist/ControlExplorer` weitergegeben werden. Auf dem Zielsystem sind weder Python noch die Python-Pakete erforderlich, solange die Zielumgebung zur Build-Umgebung kompatibel ist.
 
-### Linux-App-Menueintrag erzeugen
+### Linux-App-Menüeintrag erzeugen
 
-Damit Control Explorer unter Linux wie ein normales Programm im App-Menue erscheint, kann eine `.desktop`-Datei erzeugt werden. Die folgenden Befehle legen sie fuer den aktuellen Benutzer unter `~/.local/share/applications` an:
+Damit Control Explorer unter Linux wie ein normales Programm im App-Menü erscheint, kann eine `.desktop`-Datei erzeugt werden. Die folgenden Befehle legen sie für den aktuellen Benutzer unter `~/.local/share/applications` an:
 
 ```bash
 APP_DIR="$(pwd)/dist/ControlExplorer"
@@ -135,27 +135,27 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 ```
 
-Danach sollte `Control Explorer` im App-Menue der Desktop-Umgebung auffindbar sein. Falls der Eintrag nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden.
+Danach sollte `Control Explorer` im App-Menü der Desktop-Umgebung auffindbar sein. Falls der Eintrag nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden.
 
 ## Warum kein einzelnes EXE-Archiv?
 
-Die Anwendung verwendet grosse wissenschaftliche Bibliotheken wie NumPy, SciPy und Matplotlib. Der `onedir`-Build startet schneller, weil diese Dateien nicht bei jedem Programmstart aus einer einzelnen EXE entpackt werden muessen.
+Die Anwendung verwendet große wissenschaftliche Bibliotheken wie NumPy, SciPy und Matplotlib. Der `onedir`-Build startet schneller, weil diese Dateien nicht bei jedem Programmstart aus einer einzelnen EXE entpackt werden müssen.
 
 ## Benutzerdaten
 
 - Einstellungen: `%APPDATA%\ControlExplorer\settings.json`
 - Gespeicherte Beispiele: `Dokumente\Control Explorer Examples`
 
-Diese Dateien liegen ausserhalb des Programmordners und bleiben bei einem Programmupdate erhalten.
+Diese Dateien liegen außerhalb des Programmordners und bleiben bei einem Programmupdate erhalten.
 
-## Veroeffentlichung
+## Veröffentlichung
 
-Vor einer Veroeffentlichung:
+Vor einer Veröffentlichung:
 
 1. `dist\ControlExplorer\ControlExplorer.exe` auf einem Windows-Rechner ohne Python testen.
 2. `dist/ControlExplorer/ControlExplorer` auf einem Linux-Rechner ohne aktivierte Python-Umgebung testen.
-3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung, Hover, SISO Tool sowie Beispiel-Speichern/Laden pruefen.
-4. Den vollstaendigen Ordner als ZIP-Datei veroeffentlichen, beispielsweise ueber GitHub Releases.
-5. Fuer eine professionelle oeffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
+3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung, Hover sowie Beispiel-Speichern/Laden prüfen.
+4. Den vollständigen Ordner als ZIP-Datei veröffentlichen, beispielsweise über GitHub Releases.
+5. Für eine professionelle öffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
 
-Windows-Builds muessen unter Windows erstellt werden. Linux-Builds muessen unter Linux erstellt werden. Fuer macOS wird ein eigener Build auf macOS benoetigt.
+Windows-Builds müssen unter Windows erstellt werden. Linux-Builds müssen unter Linux erstellt werden. Für macOS wird ein eigener Build auf macOS benötigt.
