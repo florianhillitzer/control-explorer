@@ -146,7 +146,7 @@ Die Anwendung verwendet große wissenschaftliche Bibliotheken wie NumPy, SciPy u
 - Einstellungen: `%APPDATA%\ControlExplorer\settings.json`
 - Gespeicherte Beispiele: `Dokumente\Control Explorer Examples`
 
-Diese Dateien liegen außerhalb des Programmordners und bleiben bei einem Programmupdate erhalten.
+Diese Dateien liegen außerhalb des Programmordners und bleiben bei einem Programmupdate erhalten. Globale Anzeige- und Bedienvorlieben werden in `settings.json` gespeichert; Beispiele enthalten nur Modell- und Analyseparameter.
 
 ## Veröffentlichung
 

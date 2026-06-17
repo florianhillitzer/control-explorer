@@ -16,6 +16,8 @@ Der offene Kreis für Nyquist, Bode und Wurzelortskurve ist `L(s)=K(s)G(s)`. Der
 
 Mit **Aktualisieren** werden alle Darstellungen neu berechnet. Beispiele können gespeichert und geladen werden; der Standardordner ist `Control Explorer Examples` im Dokumente-Ordner.
 
+Ein Beispiel speichert das Modell und die dazugehörigen Analyseparameter, zum Beispiel Frequenzbereiche, Zeitbereich, Padé-Ordnung, Störsignal und gewählte Systempfade. Reine Anzeige- und Bedienvorlieben wie Grid, Auto-Update, Bode-Einheit oder Dämpfungslinien bleiben globale Programmeinstellungen.
+
 ## Nyquist / Ortskurve
 
 Der Tab zeigt wahlweise den offenen Kreis, die Führungsübertragung oder die Sensitivität. Für Stabilitätsbetrachtungen ist meist der offene Kreis mit kritischem Punkt `-1` relevant.

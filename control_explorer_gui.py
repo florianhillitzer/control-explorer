@@ -101,6 +101,26 @@ class ControlExplorerApp(tk.Tk):
         "normalized_nyquist": False,
         "direction_arrow_omegas": "1, 5, 10, 20",
     }
+    GLOBAL_SETTING_KEYS = frozenset(
+        {
+            "auto_update",
+            "grid",
+            "bode_frequency_unit",
+            "show_bode_margins",
+            "root_locus_log_gain",
+            "root_locus_equal_axis",
+            "root_locus_show_damping",
+            "root_locus_damping_ratios",
+            "disturbance_show_reference_component",
+            "disturbance_show_disturbance_component",
+            "equal_axis",
+            "show_negative_freq",
+            "show_critical_point",
+            "normalized_nyquist",
+            "direction_arrow_omegas",
+        }
+    )
+    EXAMPLE_SETTING_KEYS = frozenset(set(DEFAULT_SETTINGS) - GLOBAL_SETTING_KEYS)
 
     def __init__(self):
         self._set_windows_app_id()
@@ -127,7 +147,7 @@ class ControlExplorerApp(tk.Tk):
         self.examples_dir = self._documents_directory() / "Control Explorer Examples"
         self.app_version = self._read_version()
         self.current_example_path = None
-        self.current_example_var = tk.StringVar(value="Aktuelles Beispiel: keines geladen")
+        self.current_example_var = tk.StringVar(value="Aktuelles Beispiel: Standard")
 
         self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung")
         self._set_window_icon()
@@ -352,8 +372,22 @@ class ControlExplorerApp(tk.Tk):
             "direction_arrow_omegas": self.direction_arrow_positions_var,
         }
 
-    def _settings_snapshot(self):
-        return {key: variable.get() for key, variable in self._settings_variables().items()}
+    def _settings_snapshot(self, keys=None):
+        variables = self._settings_variables()
+        selected_keys = variables.keys() if keys is None else keys
+        return {key: variables[key].get() for key in selected_keys if key in variables}
+
+    def _global_settings_snapshot(self):
+        return self._settings_snapshot(self.GLOBAL_SETTING_KEYS)
+
+    def _example_settings_snapshot(self):
+        return self._settings_snapshot(self.EXAMPLE_SETTING_KEYS)
+
+    @staticmethod
+    def _settings_subset(settings, keys):
+        if not isinstance(settings, dict):
+            return {}
+        return {key: settings[key] for key in keys if key in settings}
 
     def _normalize_system_selection(self, selected):
         legacy_system_labels = {
@@ -395,7 +429,7 @@ class ControlExplorerApp(tk.Tk):
                 settings = json.load(handle)
             if not isinstance(settings, dict):
                 raise ValueError("Die Einstellungsdatei enthält kein JSON-Objekt.")
-            self._apply_settings(settings)
+            self._apply_settings(self._settings_subset(settings, self.GLOBAL_SETTING_KEYS))
         except Exception as exc:
             messagebox.showwarning(
                 "Einstellungen",
@@ -407,7 +441,7 @@ class ControlExplorerApp(tk.Tk):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             with self.settings_path.open("w", encoding="utf-8") as handle:
-                json.dump(self._settings_snapshot(), handle, indent=2, ensure_ascii=False)
+                json.dump(self._global_settings_snapshot(), handle, indent=2, ensure_ascii=False)
         except Exception as exc:
             self.status_var.set(f"Einstellungen konnten nicht gespeichert werden: {exc}")
 
@@ -473,30 +507,29 @@ class ControlExplorerApp(tk.Tk):
         notebook = ttk.Notebook(dialog)
         notebook.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-        tab_general = ttk.Frame(notebook, padding=10)
+        tab_nyquist = ttk.Frame(notebook, padding=10)
         tab_freq = ttk.Frame(notebook, padding=10)
         tab_root_locus = ttk.Frame(notebook, padding=10)
         tab_step = ttk.Frame(notebook, padding=10)
         tab_disturbance = ttk.Frame(notebook, padding=10)
-        tab_nyquist = ttk.Frame(notebook, padding=10)
+        tab_general = ttk.Frame(notebook, padding=10)
 
-        notebook.add(tab_general, text="Allgemein")
-        notebook.add(tab_freq, text="Frequenz")
+        notebook.add(tab_nyquist, text="Nyquist / Ortskurve")
+        notebook.add(tab_freq, text="Frequenz / Bode")
         notebook.add(tab_root_locus, text="Wurzelortskurve")
-        notebook.add(tab_step, text="Sprung")
-        notebook.add(tab_disturbance, text="Störung")
-        notebook.add(tab_nyquist, text="Ortskurve")
+        notebook.add(tab_step, text="Sprungantwort")
+        notebook.add(tab_disturbance, text="Störaufschaltung")
+        notebook.add(tab_general, text="Allgemein")
 
-        for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_nyquist):
+        for tab in (tab_nyquist, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_general):
             tab.columnconfigure(0, weight=1)
-            tab.rowconfigure(0, weight=1)
 
-        self._create_general_settings(tab_general)
+        self._create_nyquist_settings(tab_nyquist)
         self._create_frequency_settings(tab_freq)
         self._create_root_locus_settings(tab_root_locus)
         self._create_step_settings(tab_step)
         self._create_disturbance_settings(tab_disturbance)
-        self._create_nyquist_settings(tab_nyquist)
+        self._create_general_settings(tab_general)
 
         button_frame = ttk.Frame(dialog)
         button_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
@@ -975,7 +1008,9 @@ class ControlExplorerApp(tk.Tk):
             "direkt als Ausdrücke wie K_R * (1 + 1/(T_I*s)) oder 1/(s**2 + 2*s + 1) eingegeben werden.\n\n"
             "3. Aktualisieren und Beispiele\n"
             "Mit Aktualisieren werden alle Darstellungen neu berechnet. Beispiele können gespeichert und geladen "
-            "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner.\n\n"
+            "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner. "
+            "Beispiele speichern Modell- und Analyseparameter; reine Anzeige- und Bedienvorlieben bleiben globale "
+            "Programmeinstellungen.\n\n"
             "4. Nyquist / Ortskurve\n"
             "Der Tab zeigt wahlweise den offenen Kreis, die Führungsübertragung oder die Sensitivität. Für "
             "Stabilitätsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
@@ -1018,9 +1053,46 @@ class ControlExplorerApp(tk.Tk):
         self._create_left_panel(left)
         self._create_right_panel(right)
 
+        self.output_var = tk.StringVar(value="")
+        self.output_label = tk.Label(
+            self,
+            textvariable=self.output_var,
+            anchor="w",
+            justify="left",
+            padx=8,
+            pady=5,
+            bg="#fff4cc",
+            fg="#5a3d00",
+        )
+        self.output_label.grid(row=1, column=0, sticky="ew")
+        self.output_label.grid_remove()
+        self.output_label.bind(
+            "<Configure>",
+            lambda event: self.output_label.configure(wraplength=max(100, event.width - 16)),
+        )
+
         self.status_var = tk.StringVar(value="Bereit.")
         status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN, padding=(6, 3))
-        status.grid(row=1, column=0, sticky="ew")
+        status.grid(row=2, column=0, sticky="ew")
+
+    def _set_output_message(self, message="", level="warning"):
+        if not hasattr(self, "output_label"):
+            return
+
+        if not message:
+            self.output_var.set("")
+            self.output_label.grid_remove()
+            return
+
+        colors = {
+            "warning": ("#fff4cc", "#5a3d00"),
+            "error": ("#ffe5e5", "#7a1111"),
+            "info": ("#eef5ff", "#234d73"),
+        }
+        background, foreground = colors.get(level, colors["warning"])
+        self.output_label.configure(bg=background, fg=foreground)
+        self.output_var.set(message)
+        self.output_label.grid()
 
     def _create_left_panel(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -2818,18 +2890,13 @@ class ControlExplorerApp(tk.Tk):
     def _show_control_warnings_if_needed(self):
         if not self._control_warnings:
             self._last_warning_text = ""
+            self._set_output_message("")
             return
 
-        warning_text = "\n".join(dict.fromkeys(self._control_warnings))
-        if warning_text == self._last_warning_text:
-            return
-
+        warnings_text = list(dict.fromkeys(self._control_warnings))
+        warning_text = "\n".join(f"- {line}" for line in warnings_text)
         self._last_warning_text = warning_text
-        messagebox.showwarning(
-            "Warnung von python-control",
-            "python-control hat Warnungen ausgegeben. Die Ergebnisse können dadurch ungenau oder irreführend sein:\n\n"
-            f"{warning_text}",
-        )
+        self._set_output_message(f"Hinweise / Warnungen:\n{warning_text}", level="warning")
 
     def update_plots(self):
         if self._after_id is not None:
@@ -2837,6 +2904,7 @@ class ControlExplorerApp(tk.Tk):
         self._after_id = None
         self._is_updating = True
         self._control_warnings = []
+        self._set_output_message("")
 
         try:
             data = self._parse_user_input()
@@ -2925,6 +2993,7 @@ class ControlExplorerApp(tk.Tk):
 
         except Exception as exc:
             self.status_var.set(f"Fehler: {exc}")
+            self._set_output_message(f"Fehler bei der Auswertung: {exc}", level="error")
             self._show_error_in_info(exc)
 
         finally:
@@ -3026,15 +3095,8 @@ class ControlExplorerApp(tk.Tk):
             ax.set_xlabel(r"$\Re\{H(j\omega)\}$")
             ax.set_ylabel(r"$\Im\{H(j\omega)\}$")
             if omitted_points:
-                ax.text(
-                    0.02,
-                    0.98,
-                    f"{omitted_points} nicht-endliche Punkte ausgelassen",
-                    transform=ax.transAxes,
-                    va="top",
-                    ha="left",
-                    fontsize=8,
-                    bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": "#aaaaaa", "alpha": 0.85},
+                self._control_warnings.append(
+                    f"Nyquist/Ortskurve: {omitted_points} nicht-endliche Punkte wurden ausgelassen."
                 )
 
         if self.equal_axis_var.get():
@@ -3351,44 +3413,19 @@ class ControlExplorerApp(tk.Tk):
                 fontsize=9,
             )
 
-        note_y = 0.04
         if pm is None:
-            ax_phase.text(
-                0.02,
-                note_y,
-                "\u03c6_R nicht definiert: kein 0-dB-Durchtritt von oben nach unten\n"
-                "im dargestellten Frequenzbereich gefunden.",
-                transform=ax_phase.transAxes,
-                fontsize=9,
-                va="bottom",
-                ha="left",
-                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+            self._control_warnings.append(
+                "Bode: \u03c6_R nicht definiert, weil kein 0-dB-Durchtritt von oben nach unten "
+                "im dargestellten Frequenzbereich gefunden wurde."
             )
-            note_y += 0.15
 
         integrator_note = self._integrator_margin_note(integrator_order)
         if integrator_note:
-            ax_phase.text(
-                0.02,
-                note_y,
-                integrator_note,
-                transform=ax_phase.transAxes,
-                fontsize=8.5,
-                va="bottom",
-                ha="left",
-                bbox={"boxstyle": "round,pad=0.35", "fc": "#fff7df", "ec": "#b8860b", "alpha": 0.92},
-            )
+            self._control_warnings.append(f"Bode: {integrator_note}")
 
         if gm is None and pm is None:
-            ax_mag.text(
-                0.02,
-                0.04,
-                "Keine Durchtrittsfrequenz im dargestellten Frequenzbereich gefunden.",
-                transform=ax_mag.transAxes,
-                fontsize=9,
-                va="bottom",
-                ha="left",
-                bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
+            self._control_warnings.append(
+                "Bode: Keine Durchtrittsfrequenz im dargestellten Frequenzbereich gefunden.",
             )
 
     def _plot_bode(self, omega, H, L_open=None, sys_rational=None):
@@ -3432,16 +3469,9 @@ class ControlExplorerApp(tk.Tk):
             if self._is_open_loop_selection(self.bode_plot_system_var.get()) and L_open is not None:
                 self._plot_bode_margins(ax_mag, ax_phase, omega, L_open, sys_rational)
             else:
-                ax_mag.text(
-                    0.02,
-                    0.04,
-                    "Reserven werden für den offenen Kreis L(jω) bestimmt.\n"
+                self._control_warnings.append(
+                    "Bode: Reserven werden für den offenen Kreis L(jω) bestimmt.\n"
                     "Bitte im Bode-Tab den offenen Kreis auswählen.",
-                    transform=ax_mag.transAxes,
-                    fontsize=9,
-                    va="bottom",
-                    ha="left",
-                    bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#777777", "alpha": 0.9},
                 )
 
         if ax_mag.get_legend_handles_labels()[0]:
@@ -3786,27 +3816,12 @@ class ControlExplorerApp(tk.Tk):
         else:
             ax.set_aspect("auto")
 
-        delay_note, delay_note_background, delay_note_border = self._root_locus_delay_note(
+        delay_note, _delay_note_background, _delay_note_border = self._root_locus_delay_note(
             delay,
             pade_order,
         )
-        ax.text(
-            0.02,
-            0.98,
-            delay_note,
-            transform=ax.transAxes,
-            fontsize=8.5,
-            va="top",
-            ha="left",
-            wrap=True,
-            bbox={
-                "boxstyle": "round,pad=0.4",
-                "fc": delay_note_background,
-                "ec": delay_note_border,
-                "alpha": 0.95,
-            },
-            zorder=8,
-        )
+        if delay > 0:
+            self._control_warnings.append(delay_note)
 
         stability_lines = []
         if marker_poles.size and np.all(marker_poles.real < -1e-9):
@@ -4182,17 +4197,10 @@ class ControlExplorerApp(tk.Tk):
             )
             self._register_hover(ax, "step", t_plot, y_plot, input_signal=input_signal)
         except Exception as exc:
-            self._control_warnings.append(f"step_response: {exc}")
-            ax.text(
-                0.05,
-                0.95,
-                "Sprungantwort konnte nicht berechnet werden.\n"
-                "Mögliche Ursachen: uneigentliche Übertragungsfunktion,\n"
-                "numerisch problematische Padé-Ordnung oder instabiles System.\n\n"
-                f"{exc}",
-                transform=ax.transAxes,
-                va="top",
-                ha="left",
+            self._control_warnings.append(
+                "Sprungantwort konnte nicht berechnet werden. Mögliche Ursachen: "
+                "uneigentliche Übertragungsfunktion, numerisch problematische Padé-Ordnung "
+                f"oder instabiles System. Details: {exc}"
             )
 
         ax.set_xlabel(r"$t$ [s]")
@@ -4371,7 +4379,7 @@ class ControlExplorerApp(tk.Tk):
             "controller": self.controller_text.get("1.0", tk.END).strip(),
             "prefilter": self.prefilter_text.get("1.0", tk.END).strip(),
             "delay": self.delay_var.get(),
-            "settings": self._settings_snapshot(),
+            "settings": self._example_settings_snapshot(),
         }
 
     def _prepare_examples_directory(self):
@@ -4445,8 +4453,7 @@ class ControlExplorerApp(tk.Tk):
 
             settings = example.get("settings")
             if isinstance(settings, dict):
-                self._apply_settings(settings)
-                self._save_settings()
+                self._apply_settings(self._settings_subset(settings, self.EXAMPLE_SETTING_KEYS))
 
             self._set_current_example_path(filename)
             self.status_var.set(f"Beispiel geladen: {Path(filename).name}")
