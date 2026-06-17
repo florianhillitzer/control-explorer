@@ -77,6 +77,11 @@ rm -rf build dist ControlExplorer.spec
 python -m PyInstaller --noconfirm --clean --onedir \
   --name ControlExplorer \
   --add-data "control_explorer_icon.png:." \
+  --add-data "mrm_logo.png:." \
+  --add-data "VERSION:." \
+  --add-data "LICENSE:." \
+  --add-data "NOTICE:." \
+  --add-data "docs:docs" \
   --collect-all control \
   --hidden-import=PIL.ImageTk \
   --hidden-import=PIL._tkinter_finder \

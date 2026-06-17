@@ -12,6 +12,11 @@ a = Analysis(
     datas=[
         ("control_explorer.ico", "."),
         ("control_explorer_icon.png", "."),
+        ("mrm_logo.png", "."),
+        ("VERSION", "."),
+        ("LICENSE", "."),
+        ("NOTICE", "."),
+        ("docs", "docs"),
     ] + control_datas,
     hiddenimports=control_hiddenimports,
     hookspath=[],

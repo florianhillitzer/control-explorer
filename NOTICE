@@ -1,0 +1,17 @@
+Control Explorer
+Copyright (c) 2026 Florian Hillitzer
+
+This product is licensed under the Apache License, Version 2.0.
+
+Third-party components used by Control Explorer include:
+
+- python-control, BSD-3-Clause
+- Matplotlib, Matplotlib License
+- NumPy, BSD-3-Clause
+- SciPy, BSD-3-Clause
+- Pillow, HPND/Pillow License
+- PyInstaller, GPL-2.0-or-later with bootloader exception, used for packaging/builds
+
+Binary distributions of NumPy and SciPy may include additional components such
+as OpenBLAS, LAPACK and GCC runtime libraries. Their license notices should be
+preserved when redistributing a bundled application.

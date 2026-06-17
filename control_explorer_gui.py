@@ -12,6 +12,8 @@ import re
 import sys
 import traceback
 import warnings
+import importlib.metadata as importlib_metadata
+import webbrowser
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,7 +23,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 
 import control as ct
 
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 import io
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
@@ -49,6 +51,10 @@ class ControlExplorerApp(tk.Tk):
     SYSTEM_SENS = "Sensitivitaet S(s)"
     BODE_UNIT_OMEGA = "rad/s"
     BODE_UNIT_HZ = "Hz"
+    APP_NAME = "Control Explorer"
+    APP_VERSION_FALLBACK = "0.3.0"
+    COPYRIGHT_HOLDER = "Florian Hillitzer"
+    APP_LICENSE = "Apache License 2.0"
 
     DEFAULT_SETTINGS = {
         "omega_min": "0",
@@ -98,11 +104,6 @@ class ControlExplorerApp(tk.Tk):
         super().__init__()
         self._native_icon_handles = []
 
-        self.title("Control Explorer - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung")
-        self._set_window_icon()
-        self.geometry("1300x820")
-        self.minsize(1050, 650)
-
         self._after_id = None
         self._is_updating = False
         self._settings_window = None
@@ -122,6 +123,12 @@ class ControlExplorerApp(tk.Tk):
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
         self.examples_dir = self._documents_directory() / "Control Explorer Examples"
+        self.app_version = self._read_version()
+
+        self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Stoeraufschaltung")
+        self._set_window_icon()
+        self.geometry("1300x820")
+        self.minsize(1050, 650)
 
         self._create_variables()
         self._load_settings()
@@ -158,6 +165,14 @@ class ControlExplorerApp(tk.Tk):
                 return path
 
         return candidates[0]
+
+    def _read_version(self):
+        version_path = self._resource_path("VERSION")
+        try:
+            version = version_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            version = ""
+        return version or self.APP_VERSION_FALLBACK
 
     @staticmethod
     def _set_windows_app_id():
@@ -423,6 +438,11 @@ class ControlExplorerApp(tk.Tk):
         settings_menu.add_command(label="SISO Tool öffnen", command=self.open_sisotool)
 
         menu_bar.add_cascade(label="Einstellungen", menu=settings_menu)
+        menu_bar.add_command(label="Hilfe", command=lambda: self._open_markdown_window("Hilfe", "docs/help.md", self._help_text()))
+        menu_bar.add_command(
+            label="Über / Lizenz",
+            command=lambda: self._open_markdown_window("Über / Lizenz", "docs/legal.md", self._legal_text()),
+        )
         self.config(menu=menu_bar)
 
     def _open_direction_arrow_settings(self):
@@ -463,6 +483,7 @@ class ControlExplorerApp(tk.Tk):
 
         for tab in (tab_general, tab_freq, tab_root_locus, tab_step, tab_disturbance, tab_nyquist):
             tab.columnconfigure(0, weight=1)
+            tab.rowconfigure(0, weight=1)
 
         self._create_general_settings(tab_general)
         self._create_frequency_settings(tab_freq)
@@ -668,6 +689,302 @@ class ControlExplorerApp(tk.Tk):
             text="Ein Pfeil pro angegebenem omega-Wert, getrennt durch Kommas.",
             foreground="#555555",
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
+
+    @staticmethod
+    def _set_readonly_text(widget, text):
+        widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.insert("1.0", text)
+        widget.configure(state=tk.DISABLED)
+
+    def _open_markdown_window(self, title, markdown_path, fallback_markdown):
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.geometry("760x680")
+        dialog.minsize(620, 480)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        text_widget = ScrolledText(dialog, wrap=tk.WORD, padx=18, pady=14)
+        text_widget.grid(row=0, column=0, sticky="nsew")
+        markdown = self._read_markdown_resource(markdown_path, fallback_markdown)
+        self._render_markdown(text_widget, markdown)
+
+        ttk.Button(dialog, text="Schliessen", command=dialog.destroy).grid(
+            row=1,
+            column=0,
+            sticky="e",
+            padx=10,
+            pady=(0, 10),
+        )
+
+    def _read_markdown_resource(self, filename, fallback_text):
+        path = self._resource_path(filename)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = fallback_text
+        replacements = {
+            "APP_NAME": self.APP_NAME,
+            "APP_VERSION": self.app_version,
+            "COPYRIGHT_HOLDER": self.COPYRIGHT_HOLDER,
+            "APP_LICENSE": self.APP_LICENSE,
+            "THIRD_PARTY_NOTICES": self._third_party_notice_text(),
+        }
+        for key, value in replacements.items():
+            text = text.replace("{{" + key + "}}", value)
+        return text
+
+    def _render_markdown(self, widget, markdown):
+        widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget._markdown_images = []
+
+        widget.tag_configure("h1", font=("Segoe UI", 18, "bold"), spacing1=10, spacing3=8)
+        widget.tag_configure("h2", font=("Segoe UI", 14, "bold"), spacing1=10, spacing3=5)
+        widget.tag_configure("h3", font=("Segoe UI", 11, "bold"), spacing1=8, spacing3=4)
+        widget.tag_configure("body", font=("Segoe UI", 10), spacing3=4)
+        widget.tag_configure("bold", font=("Segoe UI", 10, "bold"))
+        widget.tag_configure("code", font=("Consolas", 9), background="#f0f0f0")
+        widget.tag_configure("list", lmargin1=20, lmargin2=38, spacing3=3)
+        widget.tag_configure("rule", foreground="#888888")
+        widget.tag_configure("link", foreground="#0645ad", underline=True)
+
+        self._insert_brand_logos(widget)
+
+        in_code_block = False
+        for raw_line in markdown.splitlines():
+            line = raw_line.rstrip()
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                widget.insert(tk.END, line + "\n", ("code",))
+                continue
+            if not line.strip():
+                widget.insert(tk.END, "\n")
+                continue
+            if line.startswith("# "):
+                widget.insert(tk.END, line[2:].strip() + "\n", ("h1",))
+            elif line.startswith("## "):
+                widget.insert(tk.END, line[3:].strip() + "\n", ("h2",))
+            elif line.startswith("### "):
+                widget.insert(tk.END, line[4:].strip() + "\n", ("h3",))
+            elif line.startswith("- "):
+                widget.insert(tk.END, "- ", ("list",))
+                self._insert_markdown_inline(widget, line[2:].strip(), ("list",))
+                widget.insert(tk.END, "\n", ("list",))
+            elif set(line.strip()) <= {"-"} and len(line.strip()) >= 3:
+                widget.insert(tk.END, "-" * 72 + "\n", ("rule",))
+            else:
+                self._insert_markdown_inline(widget, line, ("body",))
+                widget.insert(tk.END, "\n", ("body",))
+
+        widget.configure(state=tk.DISABLED)
+
+    def _insert_markdown_inline(self, widget, text, base_tags):
+        pattern = re.compile(r"(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))")
+        position = 0
+        for match in pattern.finditer(text):
+            if match.start() > position:
+                widget.insert(tk.END, text[position:match.start()], base_tags)
+            token = match.group(0)
+            if token.startswith("**"):
+                widget.insert(tk.END, token[2:-2], base_tags + ("bold",))
+            elif token.startswith("`"):
+                widget.insert(tk.END, token[1:-1], base_tags + ("code",))
+            else:
+                label, url = re.match(r"\[([^\]]+)\]\(([^)]+)\)", token).groups()
+                tag_name = f"link_{len(widget.tag_names())}_{match.start()}"
+                widget.insert(tk.END, label, base_tags + ("link", tag_name))
+                widget.tag_bind(tag_name, "<Button-1>", lambda _event, link=url: webbrowser.open(link))
+            position = match.end()
+        if position < len(text):
+            widget.insert(tk.END, text[position:], base_tags)
+
+    def _insert_brand_logos(self, widget):  
+        ce_logo = self._load_ce_logo_image()
+        mrm_logo = self._load_mrm_logo_image()
+        logos = [image for image in (ce_logo, mrm_logo) if image is not None]
+        if not logos:
+            return
+
+        target_height = 88
+        gap = 18
+        resized_logos = []
+        for image in logos:
+            scale = min(1.0, target_height / image.height)
+            resized_logos.append(
+                image.resize(
+                    (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                    Image.LANCZOS,
+                )
+            )
+
+        total_width = sum(image.width for image in resized_logos) + gap * (len(resized_logos) - 1)
+        max_width = 660
+        if total_width > max_width:
+            scale = max_width / total_width
+            resized_logos = [
+                image.resize(
+                    (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                    Image.LANCZOS,
+                )
+                for image in resized_logos
+            ]
+            total_width = sum(image.width for image in resized_logos) + gap * (len(resized_logos) - 1)
+
+        height = max(image.height for image in resized_logos)
+        combined = Image.new("RGBA", (total_width, height), "white")
+        x = 0
+        for image in resized_logos:
+            y = (height - image.height) // 2
+            combined.alpha_composite(image, (x, y))
+            x += image.width + gap
+
+        photo = ImageTk.PhotoImage(combined)
+        widget._markdown_images.append(photo)
+        widget.image_create(tk.END, image=photo)
+        widget.insert(tk.END, "\n\n")
+
+    def _load_ce_logo_image(self):
+        for filename in (
+            "control_explorer_logo.png",
+            "ce_logo.png",
+            "control_explorer_icon.png",
+            "assets/control_explorer_logo.png",
+            "assets/ce_logo.png",
+            "docs/control_explorer_logo.png",
+        ):
+            path = self._resource_path(filename)
+            if path.exists():
+                try:
+                    with Image.open(path) as image:
+                        return image.convert("RGBA")
+                except OSError:
+                    pass
+        return None
+
+    def _load_mrm_logo_image(self):
+        for filename in ("mrm_logo.png", "assets/mrm_logo.png", "docs/mrm_logo.png"):
+            path = self._resource_path(filename)
+            if path.exists():
+                try:
+                    with Image.open(path) as image:
+                        return image.convert("RGBA")
+                except OSError:
+                    pass
+        return self._generated_mrm_logo_image()
+
+    @staticmethod
+    def _generated_mrm_logo_image():
+        width, height = 720, 180
+        image = Image.new("RGBA", (width, height), "white")
+        draw = ImageDraw.Draw(image)
+        try:
+            font_big = ImageFont.truetype("arialbd.ttf", 78)
+            font_small = ImageFont.truetype("arial.ttf", 34)
+        except OSError:
+            font_big = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        red = "#aa2035"
+        black = "#1f1f1f"
+        draw.arc((140, 16, 360, 166), start=110, end=260, fill=red, width=10)
+        draw.arc((350, 32, 430, 150), start=-70, end=70, fill=black, width=9)
+        draw.text((18, 58), "MRM", fill="black", font=font_big)
+        draw.text((455, 52), "Mess-, Regel- und", fill=black, font=font_small)
+        draw.text((455, 96), "Mikrotechnik", fill=black, font=font_small)
+        return image
+
+    @staticmethod
+    def _package_version(package_name):
+        try:
+            return importlib_metadata.version(package_name)
+        except importlib_metadata.PackageNotFoundError:
+            return "nicht installiert / nicht im Python-Metadatensystem gefunden"
+
+    def _third_party_notice_text(self):
+        packages = [
+            ("python-control", "control", "BSD-3-Clause"),
+            ("Matplotlib", "matplotlib", "Matplotlib License"),
+            ("NumPy", "numpy", "BSD-3-Clause; binaere Wheels koennen OpenBLAS/LAPACK enthalten"),
+            ("SciPy", "scipy", "BSD-3-Clause; binaere Wheels koennen OpenBLAS/LAPACK enthalten"),
+            ("Pillow", "Pillow", "HPND/Pillow License"),
+            ("PyInstaller", "PyInstaller", "GPL-2.0-or-later mit Bootloader-Ausnahme (nur Build/Packaging)"),
+        ]
+        lines = ["Verwendete Open-Source-Komponenten:"]
+        for display_name, package_name, license_name in packages:
+            lines.append(
+                f"- {display_name}: Version {self._package_version(package_name)}, Lizenz: {license_name}"
+            )
+        lines.append("")
+        lines.append(
+            "Die vollstaendigen Lizenztexte der Drittkomponenten liegen in den jeweiligen "
+            "Python-Paketen bzw. Projektveroeffentlichungen. Beim Weitergeben eines gebauten "
+            "Programmpakets sollten diese Lizenz- und Copyright-Hinweise mit ausgeliefert werden."
+        )
+        return "\n".join(lines)
+
+    def _legal_text(self):
+        return (
+            f"{self.APP_NAME}\n"
+            f"Version: {self.app_version}\n\n"
+            "Impressum / Herausgeber\n"
+            "----------------------\n"
+            f"Copyright (c) 2026 {self.COPYRIGHT_HOLDER}\n"
+            "Projekt: Control Explorer\n"
+            "Zweck: Lehr- und Analysewerkzeug fuer SISO-Regelkreise im regelungstechnischen Praktikum.\n"
+            "Kontakt / dienstliche Anschrift: bitte vor externer Weitergabe mit der offiziellen Institutsangabe ergaenzen.\n\n"
+            "Lizenz\n"
+            "------\n"
+            f"Control Explorer steht unter der {self.APP_LICENSE}.\n"
+            "Kurzfassung: Nutzung, Kopieren, Veraendern und Weitergabe sind erlaubt, solange Lizenz- "
+            "und Copyright-Hinweise erhalten bleiben. Die Software wird ohne Gewaehrleistung bereitgestellt.\n"
+            "Massgeblich ist der vollstaendige Lizenztext in der Datei LICENSE.\n\n"
+            + self._third_party_notice_text()
+        )
+
+    def _help_text(self):
+        return (
+            "Gebrauchsanweisung\n"
+            "==================\n\n"
+            "1. Grundmodell\n"
+            "Der Control Explorer geht von einem Standardregelkreis mit Einheitsrueckfuehrung aus. "
+            "Links werden Parameter, optionaler Vorfilter V(s), Regler K(s), Strecke G(s) und Totzeit definiert. "
+            "Der offene Kreis fuer Nyquist, Bode und Wurzelortskurve ist L(s)=K(s)G(s). Der Vorfilter wirkt nur "
+            "auf die Fuehrungsgroesse w(t).\n\n"
+            "2. Eingaben\n"
+            "Parameter werden im Parameterfeld als Python-Code definiert, zum Beispiel K_R = 2.0 oder T_t = 0.16. "
+            "Die Variable s ist bereits als TransferFunction.s vorbereitet. Uebertragungsfunktionen koennen daher "
+            "direkt als Ausdruecke wie K_R * (1 + 1/(T_I*s)) oder 1/(s**2 + 2*s + 1) eingegeben werden.\n\n"
+            "3. Aktualisieren und Beispiele\n"
+            "Mit Aktualisieren werden alle Darstellungen neu berechnet. Beispiele koennen gespeichert und geladen "
+            "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner.\n\n"
+            "4. Nyquist / Ortskurve\n"
+            "Der Tab zeigt wahlweise den offenen Kreis, die Fuehrungsuebertragung oder die Sensitivitaet. Fuer "
+            "Stabilitaetsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
+            "koennen in den Einstellungen ueber omega-Werte gesetzt werden.\n\n"
+            "5. Frequenzgang / Bode\n"
+            "Bode-Grenzen und Frequenzeinheit werden unter Einstellungen > Frequenz gesetzt. Die Totzeit wird im "
+            "Frequenzbereich exakt als exp(-j omega T) beruecksichtigt. Amplituden- und Phasenreserve koennen "
+            "eingeblendet werden.\n\n"
+            "6. Wurzelortskurve\n"
+            "Die WOK basiert auf dem offenen Kreis ohne Vorfilter. Ein Klick auf die Kurve uebernimmt den passenden "
+            "Gain in den Parametercode bzw. in den markierten Gain-Parameter. Mehrfachpole werden mit ihrer "
+            "Vielfachheit gekennzeichnet. Totzeit kann optional ueber Pade approximiert werden.\n\n"
+            "7. Sprungantwort\n"
+            "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Pade-Ordnung aus Einstellungen > Sprung. "
+            "Bei aktivem Vorfilter wird fuer die Fuehrungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
+            "8. Stoeraufschaltung\n"
+            "Die Stoerung greift additiv am Streckeneingang an. Amplitude, Startzeit, optionale Endzeit, Toleranz "
+            "und Komponentenanzeige liegen unter Einstellungen > Stoerung. Eine leere Endzeit bedeutet, dass die "
+            "Stoerung bis zum Simulationsende aktiv bleibt.\n\n"
+            "9. Grenzen und Didaktik\n"
+            "Der Explorer soll Rechnen und Visualisieren beschleunigen, ersetzt aber nicht das Verstaendnis. "
+            "Studierende sollten zu jeder Darstellung formulieren koennen, welcher Uebertragungspfad geplottet wird "
+            "und welche Annahmen gelten, besonders bei Totzeit, Pade-Approximation und Stabilitaetsreserven."
+        )
 
     def _create_layout(self):
         self.columnconfigure(0, weight=1)
