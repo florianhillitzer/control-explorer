@@ -18,7 +18,6 @@ import webbrowser
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
-from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -58,7 +57,6 @@ class ControlExplorerApp(tk.Tk):
     APP_VERSION_FALLBACK = "0.3.0"
     COPYRIGHT_HOLDER = "Florian Hillitzer"
     APP_LICENSE = "Apache License 2.0"
-    ROOT_LOCUS_GAIN_PARAMETER = "K_WOK"
 
     DEFAULT_SETTINGS = {
         "omega_min": "0",
@@ -74,7 +72,7 @@ class ControlExplorerApp(tk.Tk):
         "root_locus_gain_max": "1e4",
         "root_locus_points": "1000",
         "root_locus_marker_gain": "1",
-        "root_locus_gain_parameter": ROOT_LOCUS_GAIN_PARAMETER,
+        "root_locus_gain_parameter": "",
         "root_locus_log_gain": True,
         "root_locus_include_delay": False,
         "root_locus_equal_axis": False,
@@ -122,13 +120,7 @@ class ControlExplorerApp(tk.Tk):
             "direction_arrow_omegas",
         }
     )
-    RUNTIME_SETTING_KEYS = frozenset(
-        {
-            "root_locus_marker_gain",
-            "root_locus_gain_parameter",
-        }
-    )
-    EXAMPLE_SETTING_KEYS = frozenset(set(DEFAULT_SETTINGS) - GLOBAL_SETTING_KEYS - RUNTIME_SETTING_KEYS)
+    EXAMPLE_SETTING_KEYS = frozenset(set(DEFAULT_SETTINGS) - GLOBAL_SETTING_KEYS)
 
     def __init__(self):
         self._set_windows_app_id()
@@ -151,11 +143,7 @@ class ControlExplorerApp(tk.Tk):
         self._pending_hover = None
         self._last_hover_target = (None, None)
         self._hover_interaction_active = False
-        self._root_locus_hover_tag = "control_explorer_root_locus_hover"
-        self._root_locus_hover_items = {}
-        self._root_locus_hover_index = None
         self._root_locus_click_data = None
-        self._root_locus_prompt_declined_signature = None
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
         self.settings_path = appdata / "ControlExplorer" / "settings.json"
@@ -478,11 +466,7 @@ class ControlExplorerApp(tk.Tk):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
         if self._hover_after_id is not None:
-            try:
-                self.after_cancel(self._hover_after_id)
-            except tk.TclError:
-                pass
-            self._hover_after_id = None
+            self.after_cancel(self._hover_after_id)
         self._save_settings()
         native_icon_handles = list(self._native_icon_handles)
         self.destroy()
@@ -1060,11 +1044,9 @@ class ControlExplorerApp(tk.Tk):
             "Frequenzbereich exakt als exp(-j omega T) berücksichtigt. Amplituden- und Phasenreserve können "
             "eingeblendet werden.\n\n"
             "6. Wurzelortskurve\n"
-            "Die WOK basiert auf dem offenen Kreis ohne Vorfilter und verwendet immer den separaten Gain K_WOK. "
-            "Falls K_WOK im Modell fehlt, kann er per Dialog ergänzt werden. Ein Klick auf die Kurve übernimmt "
-            "den passenden Wert in K_WOK; gespeicherte Beispiele werden wieder mit K_WOK = 1 abgelegt. "
-            "Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Totzeit kann optional über Padé "
-            "approximiert werden.\n\n"
+            "Die WOK basiert auf dem offenen Kreis ohne Vorfilter. Ein Klick auf die Kurve übernimmt den passenden "
+            "Gain in den Parametercode bzw. in den markierten Gain-Parameter. Mehrfachpole werden mit ihrer "
+            "Vielfachheit gekennzeichnet. Totzeit kann optional über Padé approximiert werden.\n\n"
             "7. Sprungantwort\n"
             "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Padé-Ordnung aus Einstellungen > Sprung. "
             "Bei aktivem Vorfilter wird für die Führungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
@@ -1360,11 +1342,19 @@ class ControlExplorerApp(tk.Tk):
 
         root_locus_options = ttk.Frame(self.tab_root_locus, padding=(0, 0, 0, 4))
         root_locus_options.pack(side=tk.TOP, fill=tk.X)
-        self.root_locus_gain_parameter_combo = None
-        ttk.Label(
+        ttk.Label(root_locus_options, text="Gain-Parameter:").pack(side=tk.LEFT, padx=(0, 6))
+        self.root_locus_gain_parameter_combo = ttk.Combobox(
             root_locus_options,
-            text=f"WOK-Gain: {self.ROOT_LOCUS_GAIN_PARAMETER}",
-        ).pack(side=tk.LEFT, padx=(0, 10))
+            textvariable=self.root_locus_gain_parameter_var,
+            state="readonly",
+            width=10,
+            values=[],
+        )
+        self.root_locus_gain_parameter_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.root_locus_gain_parameter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self.schedule_update(),
+        )
         self.root_locus_marker_controls = ttk.Frame(root_locus_options)
         self.root_locus_marker_controls.pack(side=tk.LEFT)
         ttk.Label(
@@ -1437,12 +1427,13 @@ class ControlExplorerApp(tk.Tk):
             self.canvas_disturbance,
         ):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
-            canvas.mpl_connect("draw_event", self._on_plot_draw)
+            canvas.mpl_connect("draw_event", self._cache_hover_backgrounds)
             canvas.mpl_connect("button_press_event", self._on_plot_interaction_start)
             canvas.mpl_connect("button_release_event", self._on_plot_interaction_end)
             canvas.mpl_connect("scroll_event", self._on_plot_interaction_scroll)
-            canvas.mpl_connect("resize_event", self._on_plot_resize)
             canvas.mpl_connect("figure_leave_event", self._on_plot_leave)
+            canvas.mpl_connect("axes_leave_event", self._on_plot_leave)
+            canvas.mpl_connect("resize_event", self._on_plot_resize)
         self.canvas_root_locus.mpl_connect("button_press_event", self._on_root_locus_click)
 
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
@@ -1466,128 +1457,22 @@ class ControlExplorerApp(tk.Tk):
         lines.append(f"{parameter_name} = {value_text}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _expression_uses_name(expression, name):
-        if not expression.strip():
-            return False
-        try:
-            tree = ast.parse(expression, mode="eval")
-        except SyntaxError:
-            return False
-        return any(isinstance(node, ast.Name) and node.id == name for node in ast.walk(tree))
-
-    def _root_locus_model_texts(self):
-        params_code = self.params_text.get("1.0", tk.END).rstrip("\n")
-        plant_expr = self.plant_text.get("1.0", tk.END).strip()
-        controller_expr = self.controller_text.get("1.0", tk.END).strip() or "1"
-        controller_enabled = self.controller_enabled_var.get()
-        system_expr = f"({controller_expr}) * ({plant_expr})" if controller_enabled else f"({plant_expr})"
-        return params_code, plant_expr, controller_expr, controller_enabled, system_expr
-
-    def _root_locus_gain_signature(self):
-        params_code, plant_expr, controller_expr, controller_enabled, _system_expr = self._root_locus_model_texts()
-        return (
-            params_code,
-            plant_expr,
-            controller_expr,
-            bool(controller_enabled),
-        )
-
-    def _root_locus_gain_is_declared_in_model(self, params_code, system_expr):
-        gain_name = self.ROOT_LOCUS_GAIN_PARAMETER
-        try:
-            assigned = gain_name in self._assigned_parameter_names(params_code)
-        except (SyntaxError, ValueError):
-            return False
-        return assigned and self._expression_uses_name(system_expr, gain_name)
-
-    def _add_root_locus_gain_to_model(self):
-        gain_name = self.ROOT_LOCUS_GAIN_PARAMETER
-        params_code, _plant_expr, controller_expr, controller_enabled, system_expr = self._root_locus_model_texts()
-
-        updated_params = self._replace_parameter_assignment(params_code, gain_name, "1")
-        self.params_text.delete("1.0", tk.END)
-        self.params_text.insert("1.0", updated_params)
-
-        if not self._expression_uses_name(system_expr, gain_name):
-            self.controller_enabled_var.set(True)
-            self.controller_text.delete("1.0", tk.END)
-            if controller_enabled and controller_expr and controller_expr != "1":
-                self.controller_text.insert("1.0", f"{gain_name} * ({controller_expr})")
-            else:
-                self.controller_text.insert("1.0", gain_name)
-
-        self.root_locus_gain_parameter_var.set(gain_name)
-        self.root_locus_marker_gain_var.set("1")
-        self._root_locus_prompt_declined_signature = None
-        self.status_var.set(f"WOK: {gain_name} = 1 wurde hinzugefügt.")
-
-    def _ensure_root_locus_gain_available(self, prompt=True):
-        gain_name = self.ROOT_LOCUS_GAIN_PARAMETER
-        params_code, _plant_expr, _controller_expr, _controller_enabled, system_expr = self._root_locus_model_texts()
-
-        if self._root_locus_gain_is_declared_in_model(params_code, system_expr):
-            self.root_locus_gain_parameter_var.set(gain_name)
-            return True
-
-        if not prompt:
-            return False
-
-        signature = self._root_locus_gain_signature()
-        if self._root_locus_prompt_declined_signature == signature:
-            return False
-
-        add_gain = messagebox.askyesno(
-            "WOK-Gain K_WOK",
-            (
-                "Für die Wurzelortskurve wird ein eigener Verstärkungsfaktor K_WOK benötigt.\n\n"
-                "Soll K_WOK = 1 zum Parametercode hinzugefügt und als Faktor vor den Regler gesetzt werden?\n\n"
-                "Der aktuell angeklickte K_WOK-Wert wird beim Speichern eines Beispiels nicht übernommen; "
-                "gespeichert wird wieder K_WOK = 1."
-            ),
-            parent=self,
-        )
-        if not add_gain:
-            self._root_locus_prompt_declined_signature = signature
-            self._set_output_message(
-                "Wurzelortskurve: K_WOK fehlt. Ohne eigenen WOK-Gain wird keine WOK berechnet.",
-                level="warning",
-            )
-            self.status_var.set("WOK: K_WOK fehlt.")
-            return False
-
-        self._add_root_locus_gain_to_model()
-        return True
-
-    def _parameters_with_root_locus_gain_reset(self, params_code, plant_expr=None, controller_expr=None):
-        gain_name = self.ROOT_LOCUS_GAIN_PARAMETER
-        params_code = params_code.rstrip("\n")
-        expressions = [
-            expr or ""
-            for expr in (
-                plant_expr,
-                controller_expr,
-            )
-        ]
-        gain_used = any(self._expression_uses_name(expr, gain_name) for expr in expressions)
-        try:
-            gain_assigned = gain_name in self._assigned_parameter_names(params_code)
-        except (SyntaxError, ValueError):
-            gain_assigned = False
-
-        if gain_assigned or gain_used:
-            return self._replace_parameter_assignment(params_code, gain_name, "1")
-        return params_code
-
     def _apply_root_locus_gain(self, gain):
         if not np.isfinite(gain) or gain < 0:
             return
 
-        if not self._ensure_root_locus_gain_available(prompt=True):
-            return
-
-        parameter_name = self.ROOT_LOCUS_GAIN_PARAMETER
+        parameter_name = self.root_locus_gain_parameter_var.get().strip()
         params_code = self.params_text.get("1.0", tk.END).rstrip("\n")
+
+        if not parameter_name:
+            parameter_name = "K_WOK"
+            controller_expr = self.controller_text.get("1.0", tk.END).strip()
+            self.controller_enabled_var.set(True)
+            self.controller_text.delete("1.0", tk.END)
+            if controller_expr and controller_expr != "1":
+                self.controller_text.insert("1.0", f"{parameter_name} * ({controller_expr})")
+            else:
+                self.controller_text.insert("1.0", parameter_name)
 
         value_text = f"{gain:.12g}"
         updated_params = self._replace_parameter_assignment(
@@ -1938,10 +1823,8 @@ class ControlExplorerApp(tk.Tk):
             "kind": kind,
             "x": np.asarray(x, dtype=float),
             "y": np.asarray(y, dtype=float),
-            "_display_cache": None,
             **extra,
         }
-        self._hover_backgrounds.pop(ax, None)
 
         if not hasattr(ax, "_control_explorer_hover_callbacks"):
             ax._control_explorer_hover_callbacks = [
@@ -1960,25 +1843,6 @@ class ControlExplorerApp(tk.Tk):
     def _hover_axes_for_canvas(self, canvas):
         return [ax for ax in self._hover_annotations if ax.figure.canvas is canvas]
 
-    def _hover_axis_from_event(self, event):
-        if event.x is None or event.y is None:
-            return None
-        try:
-            if not np.isfinite(event.x) or not np.isfinite(event.y):
-                return None
-        except TypeError:
-            return None
-
-        axes = [
-            ax
-            for ax in reversed(event.canvas.figure.axes)
-            if ax in self._hover_annotations and ax.get_visible()
-        ]
-        for ax in axes:
-            if ax.bbox.contains(event.x, event.y):
-                return ax
-        return None
-
     def _canvas_hover_blocked(self, canvas):
         if self._is_updating or self._hover_interaction_active:
             return True
@@ -1986,382 +1850,82 @@ class ControlExplorerApp(tk.Tk):
         return self._toolbar_has_active_mode(toolbar)
 
     def _on_hover_axes_limits_changed(self, ax):
-        if self._is_updating:
-            return
-        axes = self._hover_axes_for_canvas(ax.figure.canvas)
-        self._invalidate_hover_display_cache(axes)
-        self._hide_hover_annotations(axes=axes, redraw=True, discard_backgrounds=True)
-
-    def _invalidate_hover_display_cache(self, axes=None):
-        if axes is None:
-            axes = list(self._hover_data.keys())
-        for ax in axes:
-            data = self._hover_data.get(ax)
-            if data is not None:
-                data["_display_cache"] = None
-            if ax is not None:
-                self._hover_backgrounds.pop(ax, None)
-
-    def _hover_artists_for_axis(self, ax):
-        artists = []
-        annotation = self._hover_annotations.get(ax)
-        marker = self._hover_markers.get(ax)
-        if annotation is not None:
-            artists.append(annotation)
-        if marker is not None:
-            artists.append(marker)
-        return artists
-
-    def _is_root_locus_axis(self, ax):
-        return ax is self.__dict__.get("ax_root_locus")
-
-    def _root_locus_hover_widget(self):
-        canvas = self.__dict__.get("canvas_root_locus")
-        if canvas is None:
-            return None
-        try:
-            return canvas.get_tk_widget()
-        except Exception:
-            return None
-
-    def _ensure_root_locus_hover_items(self):
-        widget = self._root_locus_hover_widget()
-        if widget is None or not hasattr(widget, "create_oval"):
-            return None
-
-        items = self._root_locus_hover_items
-        required = {"marker", "box", "text", "measure"}
-        if required.issubset(items):
-            return items
-
-        tag = self._root_locus_hover_tag
-        try:
-            self._delete_root_locus_hover()
-            items = {
-                "marker": widget.create_oval(
-                    0,
-                    0,
-                    0,
-                    0,
-                    fill="#ffcc33",
-                    outline="#222222",
-                    width=1,
-                    state="hidden",
-                    tags=(tag,),
-                ),
-                "box": widget.create_rectangle(
-                    0,
-                    0,
-                    0,
-                    0,
-                    fill="white",
-                    outline="#555555",
-                    width=1,
-                    state="hidden",
-                    tags=(tag,),
-                ),
-                "text": widget.create_text(
-                    0,
-                    0,
-                    anchor="nw",
-                    justify="left",
-                    fill="#222222",
-                    font=("TkDefaultFont", 9),
-                    state="hidden",
-                    tags=(tag,),
-                ),
-                "measure": widget.create_text(
-                    -10000,
-                    -10000,
-                    anchor="nw",
-                    justify="left",
-                    fill="#222222",
-                    font=("TkDefaultFont", 9),
-                    state="normal",
-                    tags=(tag,),
-                ),
-            }
-        except tk.TclError:
-            self._root_locus_hover_items = {}
-            return None
-
-        self._root_locus_hover_items = items
-        return items
-
-    def _raise_root_locus_hover(self):
-        widget = self._root_locus_hover_widget()
-        if widget is None:
-            return False
-        try:
-            if any(not widget.type(item_id) for item_id in self._root_locus_hover_items.values()):
-                self._root_locus_hover_items = {}
-                self._root_locus_hover_index = None
-                return False
-            widget.tag_raise(self._root_locus_hover_tag)
-        except tk.TclError:
-            self._root_locus_hover_items = {}
-            self._root_locus_hover_index = None
-            return False
-        return True
-
-    def _redraw_root_locus_hover(self):
-        ax = self.__dict__.get("ax_root_locus")
-        idx = self._root_locus_hover_index
-        if ax is None or idx is None:
-            return
-        if ax not in self._hover_data:
-            self._hide_root_locus_hover()
-            return
-        self._show_root_locus_hover_at(ax, idx)
-
-    def _hide_root_locus_hover(self):
-        widget = self._root_locus_hover_widget()
-        if widget is not None:
-            for key, item_id in self._root_locus_hover_items.items():
-                if key == "measure":
-                    continue
-                try:
-                    widget.itemconfigure(item_id, state="hidden")
-                except tk.TclError:
-                    pass
-        self._root_locus_hover_index = None
-        if self._last_hover_target[0] is self.__dict__.get("ax_root_locus"):
-            self._last_hover_target = (None, None)
-
-    def _delete_root_locus_hover(self):
-        widget = self._root_locus_hover_widget()
-        if widget is not None:
-            try:
-                widget.delete(self._root_locus_hover_tag)
-            except tk.TclError:
-                pass
-        self._root_locus_hover_items = {}
-        self._root_locus_hover_index = None
-
-    def _root_locus_display_points(self, ax):
-        data = self._hover_data.get(ax)
-        if data is None:
-            return None, None
-
-        bbox = ax.bbox
-        cache_key = (
-            tuple(float(value) for value in ax.get_xlim()),
-            tuple(float(value) for value in ax.get_ylim()),
-            tuple(float(value) for value in bbox.bounds),
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(ax.figure.canvas),
+            redraw=not self._is_updating,
         )
-        cached = data.get("_display_cache")
-        if cached is not None and cached[0] == cache_key:
-            return cached[1], cached[2]
-
-        x = data["x"]
-        y = data["y"]
-        finite = np.isfinite(x) & np.isfinite(y)
-        if not np.any(finite):
-            indices = np.array([], dtype=int)
-            display_points = np.empty((0, 2), dtype=float)
-            data["_display_cache"] = (cache_key, indices, display_points)
-            return indices, display_points
-
-        indices = np.flatnonzero(finite)
-        try:
-            display_points = ax.transData.transform(np.column_stack((x[indices], y[indices])))
-        except Exception:
-            return None, None
-
-        display_finite = np.isfinite(display_points[:, 0]) & np.isfinite(display_points[:, 1])
-        indices = indices[display_finite]
-        display_points = display_points[display_finite]
-        data["_display_cache"] = (cache_key, indices, display_points)
-        return indices, display_points
-
-    def _nearest_root_locus_hover_index(self, ax, event_x, event_y):
-        indices, display_points = self._root_locus_display_points(ax)
-        if indices is None or display_points is None or not len(indices):
-            return None
-
-        dx = display_points[:, 0] - event_x
-        dy = display_points[:, 1] - event_y
-        distances = dx * dx + dy * dy
-        return int(indices[int(np.argmin(distances))])
-
-    def _root_locus_hover_text(self, data, idx):
-        pole = complex(data["x"][idx], data["y"][idx])
-        natural_frequency = abs(pole)
-        damping_ratio = (
-            -pole.real / natural_frequency
-            if natural_frequency > np.finfo(float).eps
-            else np.nan
-        )
-        damping_text = (
-            f"\u03b6 = {damping_ratio:.5g}"
-            if np.isfinite(damping_ratio)
-            else "\u03b6 nicht definiert"
-        )
-        return (
-            f"K = {data['gain'][idx]:.5g}\n"
-            f"s = {pole.real:.5g} {pole.imag:+.5g}j\n"
-            f"\u03c9\u2099 = {natural_frequency:.5g} rad/s\n"
-            f"{damping_text}"
-        )
-
-    def _show_root_locus_hover_at(self, ax, idx):
-        data = self._hover_data.get(ax)
-        widget = self._root_locus_hover_widget()
-        items = self._ensure_root_locus_hover_items()
-        if data is None or widget is None or items is None:
-            return
-
-        x = data["x"]
-        y = data["y"]
-        if not x.size or idx < 0 or idx >= x.size:
-            self._hide_root_locus_hover()
-            return
-
-        try:
-            display_x, display_y = ax.transData.transform((x[idx], y[idx]))
-        except Exception:
-            self._hide_root_locus_hover()
-            return
-
-        width = max(int(widget.winfo_width()), 1)
-        height = max(int(widget.winfo_height()), 1)
-        try:
-            figure_width, figure_height = ax.figure.canvas.get_width_height()
-        except Exception:
-            figure_width, figure_height = width, height
-        scale_x = width / max(float(figure_width), np.finfo(float).eps)
-        scale_y = height / max(float(figure_height), np.finfo(float).eps)
-        tk_x = float(display_x) * scale_x
-        tk_y = height - float(display_y) * scale_y
-        if not np.isfinite(tk_x) or not np.isfinite(tk_y):
-            self._hide_root_locus_hover()
-            return
-
-        text = self._root_locus_hover_text(data, idx)
-        marker_radius = 4.0
-        pad = 5.0
-        offset = 12.0
-
-        try:
-            widget.itemconfigure(items["measure"], text=text, state="normal")
-            widget.coords(items["measure"], -10000, -10000)
-            text_bbox = widget.bbox(items["measure"])
-            if text_bbox is None:
-                return
-
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            box_width = text_width + 2 * pad
-            box_height = text_height + 2 * pad
-
-            box_x = tk_x + offset
-            box_y = tk_y + offset
-            if box_x + box_width > width - 2:
-                box_x = tk_x - offset - box_width
-            if box_y + box_height > height - 2:
-                box_y = tk_y - offset - box_height
-            box_x = min(max(box_x, 2.0), max(width - box_width - 2.0, 2.0))
-            box_y = min(max(box_y, 2.0), max(height - box_height - 2.0, 2.0))
-
-            widget.coords(
-                items["marker"],
-                tk_x - marker_radius,
-                tk_y - marker_radius,
-                tk_x + marker_radius,
-                tk_y + marker_radius,
-            )
-            widget.coords(items["box"], box_x, box_y, box_x + box_width, box_y + box_height)
-            widget.coords(items["text"], box_x + pad, box_y + pad)
-            widget.itemconfigure(items["text"], text=text)
-            widget.itemconfigure(items["marker"], state="normal")
-            widget.itemconfigure(items["box"], state="normal")
-            widget.itemconfigure(items["text"], state="normal")
-            widget.tag_raise(items["marker"])
-            widget.tag_raise(items["box"])
-            widget.tag_raise(items["text"])
-        except tk.TclError:
-            self._delete_root_locus_hover()
-            return
-
-        self._root_locus_hover_index = idx
-        self._last_hover_target = (ax, idx)
-
-    def _on_root_locus_hover(self, event):
-        canvas = event.canvas
-        ax = self.__dict__.get("ax_root_locus")
-        if self._canvas_hover_blocked(canvas):
-            self._hide_root_locus_hover()
-            return
-        if (
-            ax is None
-            or event.x is None
-            or event.y is None
-            or not np.isfinite(event.x)
-            or not np.isfinite(event.y)
-            or not ax.bbox.contains(event.x, event.y)
-            or ax not in self._hover_data
-        ):
-            self._hide_root_locus_hover()
-            return
-
-        idx = self._nearest_root_locus_hover_index(ax, event.x, event.y)
-        if idx is None:
-            self._hide_root_locus_hover()
-            return
-        if self._root_locus_hover_index == idx and self._root_locus_hover_items:
-            if self._raise_root_locus_hover():
-                return
-
-        self._show_root_locus_hover_at(ax, idx)
 
     def _cache_hover_backgrounds(self, event):
         canvas = event.canvas
+        hover_axes = [ax for ax in canvas.figure.axes if ax in self._hover_annotations]
+        if not hover_axes:
+            self._hover_ready.discard(canvas)
+            return
+
+        visible_artists = []
+        for ax in hover_axes:
+            annotation = self._hover_annotations.get(ax)
+            marker = self._hover_markers.get(ax)
+            if annotation is not None and annotation.get_visible():
+                visible_artists.append(annotation)
+            if marker is not None and marker.get_visible():
+                visible_artists.append(marker)
+
+        if visible_artists:
+            for artist in visible_artists:
+                artist.set_visible(False)
+            self._last_hover_target = (None, None)
+            for ax in hover_axes:
+                self._hover_backgrounds.pop(ax, None)
+            self._hover_ready.discard(canvas)
+            canvas.draw_idle()
+            return
+
         self._hover_ready.add(canvas)
-        for ax in canvas.figure.axes:
-            if ax in self._hover_annotations:
-                if any(artist.get_visible() for artist in self._hover_artists_for_axis(ax)):
-                    continue
-                try:
-                    self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
-                except Exception:
-                    self._hover_backgrounds.pop(ax, None)
+        for ax in hover_axes:
+            self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
 
     def _draw_hover_axes(self, axes):
         """
-        Zeichnet Hover-Annotationen performant per Achsen-Blitting.
+        Zeichnet Hover-Annotationen performant per Blitting.
+
+        Falls Matplotlib beim Zeichnen einer Annotation intern scheitert, wird
+        der Fehler abgefangen und auf ein normales draw_idle() zurückgefallen.
+        Dadurch stürzt der Tkinter-Callback nicht ab.
         """
         for ax in set(axes):
-            if ax not in self._hover_annotations:
-                continue
-
             canvas = ax.figure.canvas
             background = self._hover_backgrounds.get(ax)
+            annotation = self._hover_annotations.get(ax)
+            marker = self._hover_markers.get(ax)
+
             if background is None:
-                for artist in self._hover_artists_for_axis(ax):
-                    if artist.get_visible():
-                        artist.set_visible(False)
+                if annotation is not None and annotation.get_visible():
+                    annotation.set_visible(False)
+                if marker is not None and marker.get_visible():
+                    marker.set_visible(False)
                 canvas.draw_idle()
                 continue
 
             try:
                 canvas.restore_region(background)
-                for artist in self._hover_artists_for_axis(ax):
-                    if artist.get_visible():
-                        ax.draw_artist(artist)
+
+                if marker is not None and marker.get_visible():
+                    ax.draw_artist(marker)
+                if annotation is not None and annotation.get_visible():
+                    ax.draw_artist(annotation)
+
                 canvas.blit(ax.bbox)
+
             except Exception:
-                self._hover_backgrounds.pop(ax, None)
-                for artist in self._hover_artists_for_axis(ax):
-                    if artist.get_visible():
-                        artist.set_visible(False)
+                # Robuster Fallback: keine Exception aus Tkinter-Callbacks herauslassen.
                 canvas.draw_idle()
 
-    def _on_plot_draw(self, event):
-        self._cache_hover_backgrounds(event)
-        if event.canvas is self.__dict__.get("canvas_root_locus"):
-            self._redraw_root_locus_hover()
-
     def _hide_hover_annotations(self, axes=None, redraw=True, discard_backgrounds=True):
+        if self._hover_after_id is not None:
+            self.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        self._pending_hover = None
         self._last_hover_target = (None, None)
 
         if axes is None:
@@ -2369,36 +1933,27 @@ class ControlExplorerApp(tk.Tk):
         else:
             axes_to_hide = [ax for ax in axes if ax in self._hover_annotations]
 
-        changed_axes = []
+        canvases = set()
         for ax in axes_to_hide:
-            if self._is_root_locus_axis(ax):
-                self._hide_root_locus_hover()
             annotation = self._hover_annotations.get(ax)
             marker = self._hover_markers.get(ax)
-            changed = False
-            if annotation is not None and annotation.get_visible():
+            if annotation is not None:
                 annotation.set_visible(False)
-                changed = True
-            if marker is not None and marker.get_visible():
+                canvases.add(ax.figure.canvas)
+            if marker is not None:
                 marker.set_visible(False)
-                changed = True
-            if changed:
-                changed_axes.append(ax)
+                canvases.add(ax.figure.canvas)
             if discard_backgrounds:
-                data = self._hover_data.get(ax)
-                if data is not None:
-                    data["_display_cache"] = None
                 self._hover_backgrounds.pop(ax, None)
+                self._hover_ready.discard(ax.figure.canvas)
 
         if redraw:
-            self._draw_hover_axes(changed_axes)
+            for canvas in canvases:
+                canvas.draw_idle()
 
     def _clear_hover_annotations(self, axes=None, redraw=True):
         if self._hover_after_id is not None:
-            try:
-                self.after_cancel(self._hover_after_id)
-            except tk.TclError:
-                pass
+            self.after_cancel(self._hover_after_id)
             self._hover_after_id = None
         self._pending_hover = None
         self._last_hover_target = (None, None)
@@ -2407,9 +1962,6 @@ class ControlExplorerApp(tk.Tk):
             axes_to_clear = list(self._hover_annotations.keys())
         else:
             axes_to_clear = list(axes)
-
-        if axes is None or any(self._is_root_locus_axis(ax) for ax in axes_to_clear):
-            self._delete_root_locus_hover()
 
         canvases = set()
         for ax in axes_to_clear:
@@ -2704,17 +2256,30 @@ class ControlExplorerApp(tk.Tk):
             annotation.set_ha("left")
             annotation.set_va("bottom")
 
+
     def _on_plot_interaction_start(self, event):
         self._hover_interaction_active = True
-        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(event.canvas),
+            redraw=True,
+            discard_backgrounds=False,
+        )
 
     def _on_plot_interaction_end(self, event):
-        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(event.canvas),
+            redraw=True,
+            discard_backgrounds=False,
+        )
         self._hover_interaction_active = False
 
     def _on_plot_interaction_scroll(self, event):
         self._hover_interaction_active = True
-        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(event.canvas),
+            redraw=True,
+            discard_backgrounds=False,
+        )
         self.after(80, self._end_hover_interaction)
 
     @staticmethod
@@ -2728,24 +2293,54 @@ class ControlExplorerApp(tk.Tk):
             return False
 
     def _on_plot_leave(self, event):
+        # Matplotlib loest figure_leave_event teilweise auch aus, wenn man nur
+        # zwischen Subplots bzw. Toolbar/Canvas-Bereichen wechselt. Deshalb
+        # erst wirklich ausblenden, wenn der Mauszeiger den Tk-Canvas verlassen hat.
         if self._pointer_inside_canvas(event.canvas):
             return
-        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(event.canvas),
+            redraw=True,
+            discard_backgrounds=False,
+        )
         self._hover_interaction_active = False
 
     def _on_plot_resize(self, event):
-        axes = self._hover_axes_for_canvas(event.canvas)
-        self._invalidate_hover_display_cache(axes)
-        self._hide_hover_annotations(axes=axes, redraw=False, discard_backgrounds=False)
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(event.canvas),
+            redraw=False,
+            discard_backgrounds=False,
+        )
 
     def _end_hover_interaction(self):
         self._hover_interaction_active = False
 
+    def _hover_axis_from_event(self, event):
+        """
+        Bestimmt die Hover-Achse ueber die Pixelposition statt ausschliesslich
+        ueber event.inaxes. Das ist robuster bei Figures mit zwei Subplots,
+        engen Achsenabstaenden und Toolbar-/Canvas-Uebergaengen.
+        """
+        if event.x is None or event.y is None:
+            return None
+        try:
+            if not np.isfinite(event.x) or not np.isfinite(event.y):
+                return None
+        except TypeError:
+            return None
+
+        axes = [
+            ax
+            for ax in reversed(event.canvas.figure.axes)
+            if ax in self._hover_annotations and ax.get_visible()
+        ]
+        for ax in axes:
+            if ax.bbox.contains(event.x, event.y):
+                return ax
+        return None
+
     def _on_plot_hover(self, event):
         canvas = event.canvas
-        if canvas is self.__dict__.get("canvas_root_locus"):
-            self._on_root_locus_hover(event)
-            return
 
         if self._canvas_hover_blocked(canvas):
             self._hide_hover_annotations(
@@ -2756,13 +2351,7 @@ class ControlExplorerApp(tk.Tk):
             return
 
         ax = self._hover_axis_from_event(event)
-        if (
-            ax is None
-            or event.x is None
-            or event.y is None
-            or not np.isfinite(event.x)
-            or not np.isfinite(event.y)
-        ):
+        if ax is None:
             self._hide_hover_annotations(
                 axes=self._hover_axes_for_canvas(canvas),
                 redraw=True,
@@ -2771,39 +2360,29 @@ class ControlExplorerApp(tk.Tk):
             return
 
         if canvas not in self._hover_ready or ax not in self._hover_backgrounds:
+            # Noch kein sauberer Blitting-Hintergrund vorhanden. Nicht dauerhaft
+            # deaktivieren, sondern einen Draw anstossen und beim naechsten
+            # motion_notify_event normal weiterarbeiten.
+            canvas.draw_idle()
             return
 
-        xdata = getattr(event, "xdata", None)
-        ydata = getattr(event, "ydata", None)
-        if getattr(event, "inaxes", None) is not ax or xdata is None or ydata is None:
-            try:
-                xdata, ydata = ax.transData.inverted().transform((event.x, event.y))
-            except Exception:
-                return
-
-        self._pending_hover = (ax, xdata, ydata, canvas)
+        self._pending_hover = (ax, event.x, event.y, canvas)
         if self._hover_after_id is None:
             self._hover_after_id = self.after(25, self._process_plot_hover)
 
     def _process_plot_hover(self):
         self._hover_after_id = None
+
         if self._is_updating:
             self._pending_hover = None
             return
         if self._pending_hover is None:
             return
 
-        ax, xdata, ydata, canvas = self._pending_hover
+        ax, event_x, event_y, canvas = self._pending_hover
         self._pending_hover = None
 
-        if (
-            ax not in self._hover_data
-            or ax not in self._hover_backgrounds
-            or xdata is None
-            or ydata is None
-            or not np.isfinite(xdata)
-            or not np.isfinite(ydata)
-        ):
+        if self._canvas_hover_blocked(canvas):
             self._hide_hover_annotations(
                 axes=self._hover_axes_for_canvas(canvas),
                 redraw=True,
@@ -2811,7 +2390,15 @@ class ControlExplorerApp(tk.Tk):
             )
             return
 
-        idx = self._nearest_hover_index(ax, xdata, ydata)
+        if ax not in self._hover_data or ax not in self._hover_backgrounds:
+            self._hide_hover_annotations(
+                axes=self._hover_axes_for_canvas(canvas),
+                redraw=True,
+                discard_backgrounds=False,
+            )
+            return
+
+        idx = self._nearest_hover_index(ax, event_x, event_y)
         if idx is None:
             self._hide_hover_annotations(
                 axes=self._hover_axes_for_canvas(canvas),
@@ -2823,10 +2410,16 @@ class ControlExplorerApp(tk.Tk):
         self._show_hover_at(ax, idx)
 
     def _linked_hover_axes(self, ax):
+        """
+        Liefert alle Achsen, die gemeinsam aktualisiert werden sollen.
+        Das koppelt z. B. Amplitude/Phase im Bode-Plot sowie y/u in der
+        Stoeraufschaltung. Ohne hover_group bleibt das Verhalten wie bisher.
+        """
         data = self._hover_data.get(ax, {})
         group = data.get("hover_group")
         if not group:
             return [ax]
+
         return [
             hover_ax
             for hover_ax in self._hover_axes_for_canvas(ax.figure.canvas)
@@ -2837,57 +2430,37 @@ class ControlExplorerApp(tk.Tk):
     def _linked_hover_index(source_data, target_data, source_idx):
         source_x = source_data["x"]
         target_x = target_data["x"]
+
         if len(source_x) == len(target_x):
             return source_idx if source_idx < len(target_x) else None
 
         if source_idx >= len(source_x):
             return None
+
         x_value = source_x[source_idx]
         finite = np.isfinite(target_x)
         if not np.any(finite):
             return None
+
         candidate_indices = np.flatnonzero(finite)
         distances = np.abs(target_x[candidate_indices] - x_value)
         return int(candidate_indices[int(np.argmin(distances))])
 
-    def _show_hover_at(self, ax, idx):
-        if ax not in self._hover_data:
-            return
-
-        canvas = ax.figure.canvas
-        data = self._hover_data[ax]
+    def _hover_text_for_point(self, data, idx):
         x = data["x"]
         y = data["y"]
-        if not x.size or idx < 0 or idx >= x.size:
-            self._hide_hover_annotations(
-                axes=self._hover_axes_for_canvas(canvas),
-                redraw=True,
-                discard_backgrounds=False,
-            )
-            return
-
         kind = data["kind"]
-        annotation = self._hover_annotations[ax]
-        marker = self._hover_markers.get(ax)
-        if (
-            self._last_hover_target == (ax, idx)
-            and ax in self._hover_backgrounds
-            and annotation.get_visible()
-            and marker is not None
-            and marker.get_visible()
-        ):
-            return
-        self._last_hover_target = (ax, idx)
 
         if kind == "nyquist":
             omega = data["omega"][idx]
-            text = (
+            return (
                 rf"$\omega = {omega:.5g}\,\mathrm{{rad/s}}$" "\n"
                 rf"$\Re\{{H(j\omega)\}} = {x[idx]:.5g}$" "\n"
                 rf"$\Im\{{H(j\omega)\}} = {y[idx]:.5g}$" "\n"
                 rf"$\left|H(j\omega)\right| = {abs(complex(x[idx], y[idx])):.5g}$"
             )
-        elif kind == "bode_mag":
+
+        if kind == "bode_mag":
             if data["frequency_unit"] == self.BODE_UNIT_HZ:
                 frequency_text = rf"$f = {x[idx]:.5g}\,\mathrm{{Hz}}$"
                 response_text = rf"$\left|H(j2\pi f)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$"
@@ -2896,12 +2469,9 @@ class ControlExplorerApp(tk.Tk):
                 frequency_text = rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$"
                 response_text = rf"$\left|H(j\omega)\right| = {y[idx]:.5g}\,\mathrm{{dB}}$"
                 phase_text = rf"$\varphi(\omega) = {data['phase'][idx]:.5g}^\circ$"
-            text = (
-                frequency_text + "\n"
-                + response_text + "\n"
-                + phase_text
-            )
-        elif kind == "bode_phase":
+            return frequency_text + "\n" + response_text + "\n" + phase_text
+
+        if kind == "bode_phase":
             if data["frequency_unit"] == self.BODE_UNIT_HZ:
                 frequency_text = rf"$f = {x[idx]:.5g}\,\mathrm{{Hz}}$"
                 phase_text = rf"$\varphi(f) = {y[idx]:.5g}^\circ$"
@@ -2910,12 +2480,9 @@ class ControlExplorerApp(tk.Tk):
                 frequency_text = rf"$\omega = {x[idx]:.5g}\,\mathrm{{rad/s}}$"
                 phase_text = rf"$\varphi(\omega) = {y[idx]:.5g}^\circ$"
                 response_text = rf"$\left|H(j\omega)\right| = {data['magnitude'][idx]:.5g}\,\mathrm{{dB}}$"
-            text = (
-                frequency_text + "\n"
-                + phase_text + "\n"
-                + response_text
-            )
-        elif kind == "root_locus":
+            return frequency_text + "\n" + phase_text + "\n" + response_text
+
+        if kind == "root_locus":
             pole = complex(x[idx], y[idx])
             natural_frequency = abs(pole)
             damping_ratio = (
@@ -2928,102 +2495,157 @@ class ControlExplorerApp(tk.Tk):
                 if np.isfinite(damping_ratio)
                 else r"$\zeta$ nicht definiert"
             )
-            text = (
+            return (
                 rf"$K = {data['gain'][idx]:.5g}$" "\n"
                 rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
                 rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
                 + damping_text
             )
-        else:
-            text = (
-                rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
-                rf"$y(t) = {y[idx]:.5g}$" "\n"
-                rf"$u(t) = {data['input_signal'][idx]:.5g}$"
-            )
 
-        linked_axes = set(self._linked_hover_axes(ax))
-        changed_axes = []
-        for hover_ax in self._hover_axes_for_canvas(canvas):
-            hover_data = self._hover_data.get(hover_ax)
-            hover_annotation = self._hover_annotations.get(hover_ax)
-            hover_marker = self._hover_markers.get(hover_ax)
-            if hover_data is None:
+        return (
+            rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
+            rf"$y(t) = {y[idx]:.5g}$" "\n"
+            rf"$u(t) = {data['input_signal'][idx]:.5g}$"
+        )
+
+    def _show_hover_at(self, source_ax, source_idx):
+        """
+        Zeigt Hover-Marker und Hover-Label am naechstliegenden Kurvenpunkt.
+        Bei gekoppelten Subplots wird derselbe x-/Zeit-/Frequenzindex auch in
+        den anderen Achsen angezeigt. Damit erscheint das Label z. B. im oberen
+        Bode-Plot auch dann, wenn die Maus gerade im unteren Phasenplot liegt.
+        """
+        if source_ax not in self._hover_data:
+            return
+
+        canvas = source_ax.figure.canvas
+        source_data = self._hover_data[source_ax]
+        linked_axes = self._linked_hover_axes(source_ax)
+
+        source_x = source_data["x"]
+        if source_idx < 0 or source_idx >= len(source_x):
+            self._hide_hover_annotations(
+                axes=self._hover_axes_for_canvas(canvas),
+                redraw=True,
+                discard_backgrounds=False,
+            )
+            return
+
+        if self._last_hover_target == (source_ax, source_idx):
+            all_visible = True
+            for linked_ax in linked_axes:
+                annotation = self._hover_annotations.get(linked_ax)
+                marker = self._hover_markers.get(linked_ax)
+                all_visible = (
+                    all_visible
+                    and annotation is not None
+                    and marker is not None
+                    and annotation.get_visible()
+                    and marker.get_visible()
+                )
+            if all_visible:
+                return
+
+        self._last_hover_target = (source_ax, source_idx)
+
+        changed_axes = set(self._hover_axes_for_canvas(canvas))
+        visible_axes = set()
+
+        for target_ax in linked_axes:
+            target_data = self._hover_data.get(target_ax)
+            if target_data is None:
                 continue
 
-            should_show_label = hover_ax is ax
-            linked_idx = (
-                self._linked_hover_index(data, hover_data, idx)
-                if hover_ax in linked_axes
-                else None
-            )
-            should_show_marker = linked_idx is not None
+            target_idx = self._linked_hover_index(source_data, target_data, source_idx)
+            if target_idx is None:
+                continue
 
-            if hover_annotation is not None:
-                if should_show_label:
-                    hover_annotation.xy = (x[idx], y[idx])
-                    hover_annotation.set_text(text)
-                    hover_annotation.set_visible(True)
-                    self._position_hover_annotation(ax, hover_annotation, x[idx], y[idx])
-                    changed_axes.append(hover_ax)
-                elif hover_annotation.get_visible():
-                    hover_annotation.set_visible(False)
-                    changed_axes.append(hover_ax)
+            x = target_data["x"]
+            y = target_data["y"]
+            if (
+                target_idx < 0
+                or target_idx >= len(x)
+                or not np.isfinite(x[target_idx])
+                or not np.isfinite(y[target_idx])
+            ):
+                continue
 
-            if hover_marker is not None:
-                if should_show_marker:
-                    target_x = hover_data["x"][linked_idx]
-                    target_y = hover_data["y"][linked_idx]
-                    hover_marker.set_data([target_x], [target_y])
-                    hover_marker.set_visible(True)
-                    changed_axes.append(hover_ax)
-                elif hover_marker.get_visible():
-                    hover_marker.set_visible(False)
-                    changed_axes.append(hover_ax)
+            annotation = self._hover_annotations.get(target_ax)
+            marker = self._hover_markers.get(target_ax)
+            if annotation is None:
+                continue
+
+            annotation.xy = (x[target_idx], y[target_idx])
+            annotation.set_text(self._hover_text_for_point(target_data, target_idx))
+            annotation.set_visible(True)
+
+            if marker is not None:
+                marker.set_data([x[target_idx]], [y[target_idx]])
+                marker.set_visible(True)
+
+            self._position_hover_annotation(target_ax, annotation, x[target_idx], y[target_idx])
+            visible_axes.add(target_ax)
+
+        for hover_ax in self._hover_axes_for_canvas(canvas):
+            if hover_ax in visible_axes:
+                continue
+
+            annotation = self._hover_annotations.get(hover_ax)
+            marker = self._hover_markers.get(hover_ax)
+
+            if annotation is not None:
+                annotation.set_visible(False)
+            if marker is not None:
+                marker.set_visible(False)
 
         self._draw_hover_axes(changed_axes)
 
-    def _nearest_hover_index(self, ax, xdata, ydata):
+    def _nearest_hover_index(self, ax, event_x, event_y):
+        """
+        Liefert den Datenindex, dessen gezeichneter Punkt der Mausposition am
+        naechsten liegt. Die Distanz wird in Pixeln gemessen, nicht nur entlang
+        der x-Achse. Dadurch wird der Hover-Punkt tatsaechlich auf den naechst-
+        liegenden Kurvenpunkt gesetzt.
+        """
         data = self._hover_data.get(ax)
         if data is None:
             return None
 
-        x = data["x"]
-        y = data["y"]
-        if not x.size:
+        x = np.asarray(data["x"], dtype=float)
+        y = np.asarray(data["y"], dtype=float)
+
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
             return None
 
-        kind = data["kind"]
-        if kind.startswith("bode") and xdata > 0:
-            return self._nearest_sorted_index(x, xdata)
-        if kind == "step":
-            return self._nearest_sorted_index(x, xdata)
+        indices = np.flatnonzero(finite)
+        try:
+            display_points = ax.transData.transform(np.column_stack((x[indices], y[indices])))
+        except Exception:
+            return None
 
-        x_span = max(abs(ax.get_xlim()[1] - ax.get_xlim()[0]), np.finfo(float).eps)
-        y_span = max(abs(ax.get_ylim()[1] - ax.get_ylim()[0]), np.finfo(float).eps)
-        stride = max(1, int(np.ceil(x.size / 1200)))
-        coarse_indices = np.arange(0, x.size, stride)
-        coarse_distance = (
-            ((x[coarse_indices] - xdata) / x_span) ** 2
-            + ((y[coarse_indices] - ydata) / y_span) ** 2
-        )
-        coarse_idx = int(coarse_indices[int(np.argmin(coarse_distance))])
-        start = max(0, coarse_idx - stride)
-        stop = min(x.size, coarse_idx + stride + 1)
-        local_distance = (
-            ((x[start:stop] - xdata) / x_span) ** 2
-            + ((y[start:stop] - ydata) / y_span) ** 2
-        )
-        return start + int(np.argmin(local_distance))
+        display_finite = np.isfinite(display_points[:, 0]) & np.isfinite(display_points[:, 1])
+        if not np.any(display_finite):
+            return None
 
-    @staticmethod
-    def _nearest_sorted_index(values, target):
-        index = int(np.searchsorted(values, target))
-        if index <= 0:
-            return 0
-        if index >= len(values):
-            return len(values) - 1
-        before = index - 1
-        return before if abs(target - values[before]) <= abs(values[index] - target) else index
+        indices = indices[display_finite]
+        display_points = display_points[display_finite]
+
+        bbox = ax.bbox
+        visible_margin = 20.0
+        visible = (
+            (display_points[:, 0] >= bbox.x0 - visible_margin)
+            & (display_points[:, 0] <= bbox.x1 + visible_margin)
+            & (display_points[:, 1] >= bbox.y0 - visible_margin)
+            & (display_points[:, 1] <= bbox.y1 + visible_margin)
+        )
+        if np.any(visible):
+            indices = indices[visible]
+            display_points = display_points[visible]
+
+        mouse = np.array([event_x, event_y], dtype=float)
+        distances = np.sum((display_points - mouse) ** 2, axis=1)
+        return int(indices[int(np.argmin(distances))])
 
     def _add_entry(self, parent, label, variable, row, col):
         frame = ttk.Frame(parent)
@@ -3137,6 +2759,31 @@ class ControlExplorerApp(tk.Tk):
         except Exception:
             return False
 
+    def _root_locus_gain_candidates(self, params_code, system_expr, env):
+        try:
+            expression_names = {
+                node.id
+                for node in ast.walk(ast.parse(system_expr, mode="eval"))
+                if isinstance(node, ast.Name)
+            }
+            assigned_names = self._assigned_parameter_names(params_code)
+        except (SyntaxError, ValueError):
+            return []
+
+        candidates = []
+        for name in assigned_names:
+            if name not in expression_names or not isinstance(env.get(name), (int, float, np.number)):
+                continue
+            if self._is_multiplicative_gain_parameter(system_expr, env, name):
+                candidates.append(name)
+
+        def priority(name):
+            lowered = name.lower()
+            preferred = lowered == "k" or lowered.startswith("k_") or lowered.startswith("k") or "gain" in lowered
+            return (not preferred, assigned_names.index(name))
+
+        return sorted(candidates, key=priority)
+
     def _update_root_locus_gain_parameter_controls(self, candidates, selected):
         combo = getattr(self, "root_locus_gain_parameter_combo", None)
         if combo is not None:
@@ -3168,18 +2815,10 @@ class ControlExplorerApp(tk.Tk):
         system_expr = f"({controller_expr}) * ({plant_expr})" if controller_enabled else f"({plant_expr})"
         sys_rational = controller * plant
 
-        gain_name = self.ROOT_LOCUS_GAIN_PARAMETER
-        root_locus_gain_ready = self._root_locus_gain_is_declared_in_model(params_code, system_expr)
-        if root_locus_gain_ready:
-            if not isinstance(env.get(gain_name), (int, float, np.number)):
-                raise ValueError("K_WOK muss im Parametercode als reelle Zahl definiert sein.")
-            if not self._is_multiplicative_gain_parameter(system_expr, env, gain_name):
-                raise ValueError(
-                    "K_WOK muss als rein multiplikativer Faktor im offenen Kreis vorkommen, "
-                    "zum Beispiel K_WOK * (K(s))."
-                )
-        gain_candidates = [gain_name] if root_locus_gain_ready else []
-        selected_gain_parameter = gain_name if root_locus_gain_ready else ""
+        gain_candidates = self._root_locus_gain_candidates(params_code, system_expr, env)
+        selected_gain_parameter = self.root_locus_gain_parameter_var.get()
+        if selected_gain_parameter not in gain_candidates:
+            selected_gain_parameter = gain_candidates[0] if gain_candidates else ""
 
         root_locus_sys_rational = sys_rational
         if selected_gain_parameter:
@@ -3202,7 +2841,10 @@ class ControlExplorerApp(tk.Tk):
         root_locus_gain_min = float(eval(self.root_locus_gain_min_var.get(), env, env))
         root_locus_gain_max = float(eval(self.root_locus_gain_max_var.get(), env, env))
         root_locus_points = int(float(eval(self.root_locus_points_var.get(), env, env)))
-        root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
+        if selected_gain_parameter:
+            root_locus_marker_gain = float(env[selected_gain_parameter])
+        else:
+            root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
@@ -3683,24 +3325,6 @@ class ControlExplorerApp(tk.Tk):
         if self._after_id is not None:
             self.after_cancel(self._after_id)
         self._after_id = None
-
-        active_tab = self.notebook.index(self.notebook.select())
-        if active_tab == 2 and not self._ensure_root_locus_gain_available(prompt=True):
-            self._clear_hover_annotations(redraw=True)
-            self.ax_root_locus.clear()
-            self.ax_root_locus.axis("off")
-            self.ax_root_locus.text(
-                0.5,
-                0.5,
-                "Für die Wurzelortskurve wird K_WOK benötigt.",
-                ha="center",
-                va="center",
-                transform=self.ax_root_locus.transAxes,
-                fontsize=11,
-            )
-            self.canvas_root_locus.draw_idle()
-            return
-
         self._clear_hover_annotations(redraw=True)
         self._is_updating = True
         self._control_warnings = []
@@ -3712,8 +3336,12 @@ class ControlExplorerApp(tk.Tk):
                 data["root_locus_gain_candidates"],
                 data["root_locus_gain_parameter"],
             )
+            marker_text = f"{data['root_locus_marker_gain']:.12g}"
+            if self.root_locus_marker_gain_var.get() != marker_text:
+                self.root_locus_marker_gain_var.set(marker_text)
             self._update_block_diagram(data)
             self._update_latex_preview(data)
+            active_tab = self.notebook.index(self.notebook.select())
 
             if active_tab == 0:
                 omega_out, L = self._frequency_response_exact_delay(
@@ -4525,23 +4153,17 @@ class ControlExplorerApp(tk.Tk):
             "gains": locus_gains,
         }
 
-        locus_segments = []
         for branch in range(loci.shape[1]):
             branch_values = loci[:, branch]
             finite = np.isfinite(branch_values.real) & np.isfinite(branch_values.imag)
-            branch_points = branch_values[finite]
-            if branch_points.size >= 2:
-                locus_segments.append(np.column_stack((branch_points.real, branch_points.imag)))
-        if locus_segments:
-            ax.add_collection(
-                LineCollection(
-                    locus_segments,
-                    colors="#1f77b4",
-                    linewidths=1.6,
-                    label="Wurzelortskurve",
-                    zorder=3,
+            if np.any(finite):
+                ax.plot(
+                    branch_values.real[finite],
+                    branch_values.imag[finite],
+                    color="#1f77b4",
+                    linewidth=1.6,
+                    label="Wurzelortskurve" if branch == 0 else None,
                 )
-            )
         self._draw_root_locus_direction_arrows(ax, loci)
 
         open_poles = np.asarray(response.poles, dtype=complex).reshape(-1)
@@ -4691,61 +4313,6 @@ class ControlExplorerApp(tk.Tk):
                 return float(t[index] - step_time)
         return None
 
-    @staticmethod
-    def _finite_real_scalar(value, tolerance=1e-8):
-        values = np.asarray(value).reshape(-1)
-        if values.size == 0:
-            return None
-        candidate = complex(values[0])
-        if not np.isfinite(candidate.real) or not np.isfinite(candidate.imag):
-            return None
-        if abs(candidate.imag) > tolerance * max(1.0, abs(candidate.real)):
-            return None
-        return float(candidate.real)
-
-    def _step_expected_final_value(self, sys_time, step_amplitude):
-        try:
-            dc_gain = self._call_control("dcgain für Sprungantwort", ct.dcgain, sys_time)
-        except Exception:
-            return None
-        return self._finite_real_scalar(step_amplitude * dc_gain)
-
-    @staticmethod
-    def _time_window_warning(label, t, y, expected_final=None, tolerance_fraction=0.02):
-        t = np.asarray(t, dtype=float).reshape(-1)
-        y = np.asarray(y, dtype=float).reshape(-1)
-        finite = np.isfinite(t) & np.isfinite(y)
-        if np.count_nonzero(finite) < 8:
-            return None
-
-        t = t[finite]
-        y = y[finite]
-        final_sample = float(y[-1])
-        y_scale = max(float(np.max(np.abs(y))), abs(final_sample), 1.0)
-        if expected_final is not None and np.isfinite(expected_final):
-            y_scale = max(y_scale, abs(float(expected_final)))
-        tolerance = tolerance_fraction * y_scale
-
-        if expected_final is not None and np.isfinite(expected_final):
-            final_error = abs(final_sample - float(expected_final))
-            if final_error > tolerance:
-                return (
-                    f"{label}: Die Simulationsendzeit t_max = {t[-1]:.5g} s ist vermutlich zu kurz. "
-                    f"Der erwartete Endwert {float(expected_final):.5g} ist am rechten Rand noch nicht erreicht "
-                    f"(Abweichung {final_error:.5g}). Angezeigte Einschwingzeiten können dadurch falsch sein."
-                )
-
-        tail_length = max(5, int(np.ceil(0.05 * y.size)))
-        tail = y[-tail_length:]
-        tail_change = float(np.max(tail) - np.min(tail))
-        if tail_change > tolerance:
-            return (
-                f"{label}: Der Verlauf ändert sich am Ende des Simulationsfensters noch merklich "
-                f"(letzte {tail_length} Punkte: Δy = {tail_change:.5g}). "
-                "Die Endzeit ist vermutlich zu kurz; angezeigte Einschwingzeiten können falsch sein."
-            )
-        return None
-
     def _plot_disturbance_response(self, data):
         ax_y = self.ax_dist_y
         ax_u = self.ax_dist_u
@@ -4802,53 +4369,29 @@ class ControlExplorerApp(tk.Tk):
         ax_y.set_title(rf"Störaufschaltung ${disturbance_symbol}$ am {disturbance_location_text}")
         ax_y.grid(self.grid_var.get(), which="both")
 
+        final_value = float(y_total[-1])
         baseline_index = max(0, int(np.searchsorted(t, data["disturbance_time"]) - 1))
         baseline_value = float(y_total[baseline_index])
-        final_value = float(y_total[-1])
         tolerance = max(
-            data["disturbance_settling_tolerance"] / 100.0 * max(abs(baseline_value), 1.0),
+            data["disturbance_settling_tolerance"] / 100.0 * max(abs(baseline_value), abs(final_value), 1.0),
             1e-6,
         )
-
-        steady_error = final_value - baseline_value
-        settling_reference_time = (
-            data["disturbance_end_time"]
-            if data["disturbance_end_time"] is not None
-            else data["disturbance_time"]
+        settling_time = self._settling_time_after_step(
+            t,
+            y_total,
+            data["disturbance_time"],
+            final_value,
+            tolerance,
         )
-        settling_reference_text = "nach Störende" if data["disturbance_end_time"] is not None else "nach Störbeginn"
-
-        if abs(steady_error) <= tolerance:
-            settling_time = self._settling_time_after_step(
-                t,
-                y_total,
-                settling_reference_time,
-                baseline_value,
-                tolerance,
-            )
-            if settling_time is None:
-                settling_text = "Ausregelzeit auf Arbeitspunkt: nicht im Simulationsfenster"
-            else:
-                settling_text = f"Ausregelzeit auf Arbeitspunkt ({settling_reference_text}): {settling_time:.4g} s"
+        if settling_time is None:
+            settling_text = "Ausregelzeit: nicht im Simulationsfenster"
         else:
-            settling_to_new_value = self._settling_time_after_step(
-                t,
-                y_total,
-                settling_reference_time,
-                final_value,
-                tolerance,
-            )
-            if settling_to_new_value is None:
-                settling_text = "Keine Ausregelzeit: Rückkehr zum Arbeitspunkt nicht erkennbar"
-            else:
-                settling_text = (
-                    "Keine vollständige Ausregelung\n"
-                    f"Einschwingen auf neuen Endwert ({settling_reference_text}): {settling_to_new_value:.4g} s"
-                )
+            settling_text = f"Ausregelzeit nach Störung: {settling_time:.4g} s"
+        steady_error = final_value - baseline_value
         ax_y.text(
             0.02,
             0.04,
-            settling_text + f"\nbleibende Abweichung y: {steady_error:.4g} V",
+            settling_text + f"\nEndwertänderung y: {steady_error:.4g} V",
             transform=ax_y.transAxes,
             fontsize=8.5,
             va="bottom",
@@ -5069,16 +4612,6 @@ class ControlExplorerApp(tk.Tk):
         try:
             tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
             y = step_amplitude * np.squeeze(yout)
-            expected_final = self._step_expected_final_value(sys_time, step_amplitude)
-            window_warning = self._time_window_warning(
-                "Sprungantwort",
-                tout,
-                y,
-                expected_final=expected_final,
-            )
-            if window_warning:
-                self._control_warnings.append(window_warning)
-
             pre_duration = max(0.1 * float(tout[-1]), np.finfo(float).eps)
             pre_points = max(2, min(200, len(tout) // 10))
             t_before = np.linspace(-pre_duration, 0.0, pre_points, endpoint=False)
@@ -5128,7 +4661,7 @@ class ControlExplorerApp(tk.Tk):
         text_lines.append(f"Sprungantwort-System: {self.step_plot_system_var.get()}")
         root_locus_label = "Wurzelortskurve"
         if data["root_locus_gain_parameter"]:
-            root_locus_label += f" (WOK-Gain {data['root_locus_gain_parameter']})"
+            root_locus_label += f" (Gain-Parameter {data['root_locus_gain_parameter']})"
         root_locus_info = (
             root_locus_label + ": "
             f"K = {data['root_locus_gains'][0]:.6g} bis {data['root_locus_gains'][-1]:.6g}"
@@ -5242,26 +4775,6 @@ class ControlExplorerApp(tk.Tk):
 
         try:
             scaled_sys_time = data["step_amplitude"] * sys_time
-            tout, yout = self._call_control(
-                "step_response für Step-Info",
-                ct.step_response,
-                sys_time,
-                T=data["t"],
-            )
-            y_step = data["step_amplitude"] * np.squeeze(yout)
-            expected_final = self._step_expected_final_value(sys_time, data["step_amplitude"])
-            window_warning = self._time_window_warning(
-                "Sprungantwort",
-                tout,
-                y_step,
-                expected_final=expected_final,
-            )
-            if window_warning:
-                self._control_warnings.append(window_warning)
-                text_lines.append("Warnung zur Zeitachse:")
-                text_lines.append(f"  {window_warning}")
-                text_lines.append("")
-
             info = self._call_control("step_info", ct.step_info, scaled_sys_time, T=data["t"])
             text_lines.append("Step-Info:")
             for key, value in info.items():
@@ -5295,19 +4808,12 @@ class ControlExplorerApp(tk.Tk):
         self.info_text.configure(state=tk.DISABLED)
 
     def _example_snapshot(self):
-        plant_expr = self.plant_text.get("1.0", tk.END).strip()
-        controller_expr = self.controller_text.get("1.0", tk.END).strip()
-        params_code = self._parameters_with_root_locus_gain_reset(
-            self.params_text.get("1.0", tk.END).strip(),
-            plant_expr=plant_expr,
-            controller_expr=controller_expr,
-        )
         return {
             "format": "control-explorer-example",
             "version": 2,
-            "parameters": params_code,
-            "plant": plant_expr,
-            "controller": controller_expr,
+            "parameters": self.params_text.get("1.0", tk.END).strip(),
+            "plant": self.plant_text.get("1.0", tk.END).strip(),
+            "controller": self.controller_text.get("1.0", tk.END).strip(),
             "prefilter": self.prefilter_text.get("1.0", tk.END).strip(),
             "delay": self.delay_var.get(),
             "settings": self._example_settings_snapshot(),
@@ -5372,20 +4878,12 @@ class ControlExplorerApp(tk.Tk):
             if example.get("format") != "control-explorer-example":
                 raise ValueError("Die Datei ist kein Control-Explorer-Beispiel.")
 
-            plant_expr = example.get("plant", example.get("system", ""))
-            controller_expr = example.get("controller", "1")
-            params_code = self._parameters_with_root_locus_gain_reset(
-                example.get("parameters", ""),
-                plant_expr=plant_expr,
-                controller_expr=controller_expr,
-            )
-
             self.params_text.delete("1.0", tk.END)
-            self.params_text.insert("1.0", params_code)
+            self.params_text.insert("1.0", example.get("parameters", ""))
             self.plant_text.delete("1.0", tk.END)
-            self.plant_text.insert("1.0", plant_expr)
+            self.plant_text.insert("1.0", example.get("plant", example.get("system", "")))
             self.controller_text.delete("1.0", tk.END)
-            self.controller_text.insert("1.0", controller_expr)
+            self.controller_text.insert("1.0", example.get("controller", "1"))
             self.prefilter_text.delete("1.0", tk.END)
             self.prefilter_text.insert("1.0", example.get("prefilter", "1"))
             self.delay_var.set(example.get("delay", "0"))
@@ -5393,12 +4891,6 @@ class ControlExplorerApp(tk.Tk):
             settings = example.get("settings")
             if isinstance(settings, dict):
                 self._apply_settings(self._settings_subset(settings, self.EXAMPLE_SETTING_KEYS))
-            self.root_locus_marker_gain_var.set("1")
-            if self._root_locus_gain_is_declared_in_model(
-                params_code,
-                f"({controller_expr or '1'}) * ({plant_expr})" if self.controller_enabled_var.get() else f"({plant_expr})",
-            ):
-                self.root_locus_gain_parameter_var.set(self.ROOT_LOCUS_GAIN_PARAMETER)
 
             self._set_current_example_path(filename)
             self.status_var.set(f"Beispiel geladen: {Path(filename).name}")
