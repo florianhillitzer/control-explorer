@@ -136,11 +136,13 @@ class ControlExplorerApp(tk.Tk):
         self._control_warnings = []
         self._hover_data = {}
         self._hover_annotations = {}
+        self._hover_markers = {}
         self._hover_backgrounds = {}
         self._hover_ready = set()
         self._hover_after_id = None
         self._pending_hover = None
         self._last_hover_target = (None, None)
+        self._hover_interaction_active = False
         self._root_locus_click_data = None
 
         appdata = Path(os.environ.get("APPDATA", Path.home()))
@@ -1075,19 +1077,25 @@ class ControlExplorerApp(tk.Tk):
         self._create_left_panel(left)
         self._create_right_panel(right)
 
+        self.output_idle_bg = self.cget("bg")
+        self.output_frame = tk.Frame(self, height=58, bg=self.output_idle_bg)
+        self.output_frame.grid(row=1, column=0, sticky="ew")
+        self.output_frame.grid_propagate(False)
+        self.output_frame.columnconfigure(0, weight=1)
+        self.output_frame.rowconfigure(0, weight=1)
+
         self.output_var = tk.StringVar(value="")
         self.output_label = tk.Label(
-            self,
+            self.output_frame,
             textvariable=self.output_var,
             anchor="w",
             justify="left",
             padx=8,
             pady=5,
-            bg="#fff4cc",
-            fg="#5a3d00",
+            bg=self.output_idle_bg,
+            fg="#666666",
         )
-        self.output_label.grid(row=1, column=0, sticky="ew")
-        self.output_label.grid_remove()
+        self.output_label.grid(row=0, column=0, sticky="nsew")
         self.output_label.bind(
             "<Configure>",
             lambda event: self.output_label.configure(wraplength=max(100, event.width - 16)),
@@ -1097,45 +1105,23 @@ class ControlExplorerApp(tk.Tk):
         status = ttk.Label(self, textvariable=self.status_var, anchor="w", relief=tk.SUNKEN, padding=(6, 3))
         status.grid(row=2, column=0, sticky="ew")
 
-    def _refresh_hover_state_after_layout_change(self):
-        self._pending_hover = None
-        self._last_hover_target = (None, None)
-        for annotation in self._hover_annotations.values():
-            if annotation.get_visible():
-                annotation.set_visible(False)
-        for ax in list(self._hover_backgrounds):
-            self._hover_backgrounds.pop(ax, None)
-        self._hover_ready.clear()
-        self.update_idletasks()
-        for canvas in (
-            self.canvas_nyquist,
-            self.canvas_bode,
-            self.canvas_root_locus,
-            self.canvas_step,
-            self.canvas_disturbance,
-        ):
-            canvas.draw_idle()
-
     def _set_output_message(self, message="", level="warning"):
         if not hasattr(self, "output_label"):
-            return
-
-        if not message:
-            self.output_var.set("")
-            self.output_label.grid_remove()
-            self._refresh_hover_state_after_layout_change()
             return
 
         colors = {
             "warning": ("#fff4cc", "#5a3d00"),
             "error": ("#ffe5e5", "#7a1111"),
             "info": ("#eef5ff", "#234d73"),
+            "idle": (self.output_idle_bg, "#666666"),
         }
+        if not message:
+            level = "idle"
+
         background, foreground = colors.get(level, colors["warning"])
+        self.output_frame.configure(bg=background)
         self.output_label.configure(bg=background, fg=foreground)
         self.output_var.set(message)
-        self.output_label.grid()
-        self._refresh_hover_state_after_layout_change()
 
     def _create_left_panel(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1231,7 +1217,7 @@ class ControlExplorerApp(tk.Tk):
         delay_frame.grid(row=8, column=0, sticky="ew", pady=(0, 8))
         delay_frame.columnconfigure(1, weight=1)
         ttk.Label(delay_frame, text="Totzeit T_t [s]").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.delay_var = tk.StringVar(value="T_t")
+        self.delay_var = tk.StringVar(value="0")
         ttk.Entry(delay_frame, textvariable=self.delay_var).grid(row=0, column=1, sticky="ew")
 
         ttk.Label(parent, text="Parametercode").grid(row=9, column=0, sticky="w")
@@ -1442,6 +1428,12 @@ class ControlExplorerApp(tk.Tk):
         ):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
             canvas.mpl_connect("draw_event", self._cache_hover_backgrounds)
+            canvas.mpl_connect("button_press_event", self._on_plot_interaction_start)
+            canvas.mpl_connect("button_release_event", self._on_plot_interaction_end)
+            canvas.mpl_connect("scroll_event", self._on_plot_interaction_scroll)
+            canvas.mpl_connect("figure_leave_event", self._on_plot_leave)
+            canvas.mpl_connect("axes_leave_event", self._on_plot_leave)
+            canvas.mpl_connect("resize_event", self._on_plot_resize)
         self.canvas_root_locus.mpl_connect("button_press_event", self._on_root_locus_click)
 
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
@@ -1518,7 +1510,7 @@ class ControlExplorerApp(tk.Tk):
             return
 
         toolbar = getattr(event.canvas, "toolbar", None)
-        if toolbar is not None and getattr(toolbar, "mode", ""):
+        if self._toolbar_has_active_mode(toolbar):
             return
 
         loci = click_data["loci"]
@@ -1720,6 +1712,8 @@ class ControlExplorerApp(tk.Tk):
 
         Funktioniert auch für logarithmische x-Achsen, z. B. beim Bode-Plot.
         """
+        self._hide_hover_annotations(axes=fig.axes, redraw=False)
+
         if toolbar is not None:
             try:
                 toolbar.push_current()
@@ -1791,9 +1785,9 @@ class ControlExplorerApp(tk.Tk):
         """
         Registriert Hover-Daten für eine Achse.
 
-        Hover-Annotationen verwenden wieder einen Pfeil, werden aber
-        zusätzlich robust gegen Matplotlib-Fehler behandelt, damit die
-        Annotation stabil bleibt und der GUI-Callback nicht abstürzt.
+        Die Hover-Annotation ist bewusst nur eine Textbox ohne Pfeil.
+        Pfeil-Annotationen sind bei Matplotlib-Blitting deutlich empfindlicher,
+        sobald gleichzeitig gezoomt oder verschoben wird.
         """
         annotation = ax.annotate(
             "",
@@ -1802,13 +1796,6 @@ class ControlExplorerApp(tk.Tk):
             textcoords="offset points",
             annotation_clip=False,
             bbox={"boxstyle": "round,pad=0.35", "fc": "white", "ec": "#555555", "alpha": 0.95},
-            arrowprops={
-                "arrowstyle": "->",
-                "color": "#555555",
-                "shrinkA": 0,
-                "shrinkB": 3,
-                "connectionstyle": "arc3,rad=0",
-            },
             fontsize=9,
             zorder=20,
         )
@@ -1817,7 +1804,21 @@ class ControlExplorerApp(tk.Tk):
         if annotation.get_bbox_patch() is not None:
             annotation.get_bbox_patch().set_clip_on(False)
 
+        marker, = ax.plot(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            markersize=6,
+            markerfacecolor="#ffcc33",
+            markeredgecolor="#222222",
+            markeredgewidth=0.9,
+            zorder=19,
+        )
+        marker.set_visible(False)
+
         self._hover_annotations[ax] = annotation
+        self._hover_markers[ax] = marker
         self._hover_data[ax] = {
             "kind": kind,
             "x": np.asarray(x, dtype=float),
@@ -1831,47 +1832,86 @@ class ControlExplorerApp(tk.Tk):
                 ax.callbacks.connect("ylim_changed", self._on_hover_axes_limits_changed),
             ]
 
+    @staticmethod
+    def _toolbar_has_active_mode(toolbar):
+        if toolbar is None:
+            return False
+        mode = getattr(toolbar, "mode", "")
+        mode_value = getattr(mode, "value", mode)
+        return bool(mode_value)
+
+    def _hover_axes_for_canvas(self, canvas):
+        return [ax for ax in self._hover_annotations if ax.figure.canvas is canvas]
+
+    def _canvas_hover_blocked(self, canvas):
+        if self._is_updating or self._hover_interaction_active:
+            return True
+        toolbar = getattr(canvas, "toolbar", None)
+        return self._toolbar_has_active_mode(toolbar)
+
     def _on_hover_axes_limits_changed(self, ax):
-        if self._is_updating:
-            return
-        annotation = self._hover_annotations.get(ax)
-        if annotation is None or not annotation.get_visible():
-            return
-        annotation.set_visible(False)
-        self._last_hover_target = (None, None)
-        self._hover_backgrounds.pop(ax, None)
-        ax.figure.canvas.draw_idle()
+        self._hide_hover_annotations(
+            axes=self._hover_axes_for_canvas(ax.figure.canvas),
+            redraw=not self._is_updating,
+        )
 
     def _cache_hover_backgrounds(self, event):
         canvas = event.canvas
+        hover_axes = [ax for ax in canvas.figure.axes if ax in self._hover_annotations]
+        if not hover_axes:
+            self._hover_ready.discard(canvas)
+            return
+
+        visible_artists = []
+        for ax in hover_axes:
+            annotation = self._hover_annotations.get(ax)
+            marker = self._hover_markers.get(ax)
+            if annotation is not None and annotation.get_visible():
+                visible_artists.append(annotation)
+            if marker is not None and marker.get_visible():
+                visible_artists.append(marker)
+
+        if visible_artists:
+            for artist in visible_artists:
+                artist.set_visible(False)
+            self._last_hover_target = (None, None)
+            for ax in hover_axes:
+                self._hover_backgrounds.pop(ax, None)
+            self._hover_ready.discard(canvas)
+            canvas.draw_idle()
+            return
+
         self._hover_ready.add(canvas)
-        for ax in canvas.figure.axes:
-            if ax in self._hover_annotations:
-                self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
+        for ax in hover_axes:
+            self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
 
     def _draw_hover_axes(self, axes):
         """
         Zeichnet Hover-Annotationen performant per Blitting.
 
-        Falls Matplotlib beim Zeichnen einer Annotation intern scheitert
-        (z. B. StopIteration in der Pfeil-/Connection-Logik), wird der Fehler
-        abgefangen und auf ein normales draw_idle() zurückgefallen. Dadurch
-        stürzt der Tkinter-Callback nicht ab und das Hover-Tool bleibt nutzbar.
+        Falls Matplotlib beim Zeichnen einer Annotation intern scheitert, wird
+        der Fehler abgefangen und auf ein normales draw_idle() zurückgefallen.
+        Dadurch stürzt der Tkinter-Callback nicht ab.
         """
         for ax in set(axes):
             canvas = ax.figure.canvas
             background = self._hover_backgrounds.get(ax)
             annotation = self._hover_annotations.get(ax)
+            marker = self._hover_markers.get(ax)
 
             if background is None:
                 if annotation is not None and annotation.get_visible():
                     annotation.set_visible(False)
+                if marker is not None and marker.get_visible():
+                    marker.set_visible(False)
                 canvas.draw_idle()
                 continue
 
             try:
                 canvas.restore_region(background)
 
+                if marker is not None and marker.get_visible():
+                    ax.draw_artist(marker)
                 if annotation is not None and annotation.get_visible():
                     ax.draw_artist(annotation)
 
@@ -1879,13 +1919,36 @@ class ControlExplorerApp(tk.Tk):
 
             except Exception:
                 # Robuster Fallback: keine Exception aus Tkinter-Callbacks herauslassen.
-                # Falls doch irgendwo ein Pfeil existiert, wird er deaktiviert und die
-                # komplette Figure neu gezeichnet.
-                try:
-                    if annotation is not None and annotation.arrow_patch is not None:
-                        annotation.arrow_patch.set_visible(False)
-                except Exception:
-                    pass
+                canvas.draw_idle()
+
+    def _hide_hover_annotations(self, axes=None, redraw=True, discard_backgrounds=True):
+        if self._hover_after_id is not None:
+            self.after_cancel(self._hover_after_id)
+            self._hover_after_id = None
+        self._pending_hover = None
+        self._last_hover_target = (None, None)
+
+        if axes is None:
+            axes_to_hide = list(self._hover_annotations.keys())
+        else:
+            axes_to_hide = [ax for ax in axes if ax in self._hover_annotations]
+
+        canvases = set()
+        for ax in axes_to_hide:
+            annotation = self._hover_annotations.get(ax)
+            marker = self._hover_markers.get(ax)
+            if annotation is not None:
+                annotation.set_visible(False)
+                canvases.add(ax.figure.canvas)
+            if marker is not None:
+                marker.set_visible(False)
+                canvases.add(ax.figure.canvas)
+            if discard_backgrounds:
+                self._hover_backgrounds.pop(ax, None)
+                self._hover_ready.discard(ax.figure.canvas)
+
+        if redraw:
+            for canvas in canvases:
                 canvas.draw_idle()
 
     def _clear_hover_annotations(self, axes=None, redraw=True):
@@ -1903,10 +1966,18 @@ class ControlExplorerApp(tk.Tk):
         canvases = set()
         for ax in axes_to_clear:
             annotation = self._hover_annotations.pop(ax, None)
+            marker = self._hover_markers.pop(ax, None)
             if annotation is not None:
                 try:
                     annotation.set_visible(False)
                     annotation.remove()
+                except (ValueError, RuntimeError):
+                    pass
+                canvases.add(ax.figure.canvas)
+            if marker is not None:
+                try:
+                    marker.set_visible(False)
+                    marker.remove()
                 except (ValueError, RuntimeError):
                     pass
                 canvases.add(ax.figure.canvas)
@@ -2186,17 +2257,44 @@ class ControlExplorerApp(tk.Tk):
             annotation.set_va("bottom")
 
 
+    def _on_plot_interaction_start(self, event):
+        self._hover_interaction_active = True
+        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+
+    def _on_plot_interaction_end(self, event):
+        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hover_interaction_active = False
+
+    def _on_plot_interaction_scroll(self, event):
+        self._hover_interaction_active = True
+        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self.after(80, self._end_hover_interaction)
+
+    def _on_plot_leave(self, event):
+        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
+        self._hover_interaction_active = False
+
+    def _on_plot_resize(self, event):
+        self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=False)
+
+    def _end_hover_interaction(self):
+        self._hover_interaction_active = False
+
     def _on_plot_hover(self, event):
-        if self._is_updating:
+        if self._canvas_hover_blocked(event.canvas):
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
             return
+
         if (
             event.inaxes is None
             or event.canvas not in self._hover_ready
             or event.inaxes not in self._hover_annotations
             or event.inaxes not in self._hover_backgrounds
         ):
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
             return
-        self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas)
+
+        self._pending_hover = (event.inaxes, event.xdata, event.ydata, event.canvas, event.x, event.y)
         if self._hover_after_id is None:
             self._hover_after_id = self.after(25, self._process_plot_hover)
 
@@ -2208,8 +2306,12 @@ class ControlExplorerApp(tk.Tk):
         if self._pending_hover is None:
             return
 
-        ax, xdata, ydata, canvas = self._pending_hover
+        ax, xdata, ydata, canvas, event_x, event_y = self._pending_hover
         self._pending_hover = None
+
+        if self._canvas_hover_blocked(canvas):
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(canvas), redraw=True)
+            return
 
         if (
             ax not in self._hover_data
@@ -2218,21 +2320,14 @@ class ControlExplorerApp(tk.Tk):
             or not np.isfinite(xdata)
             or not np.isfinite(ydata)
         ):
-            changed_axes = []
-            for annotation in self._hover_annotations.values():
-                if annotation.get_visible():
-                    annotation.set_visible(False)
-                    changed_axes.append(annotation.axes)
             self._last_hover_target = (None, None)
-            self._draw_hover_axes(changed_axes)
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(canvas), redraw=True)
             return
 
         if ax not in self._hover_backgrounds:
             # Der Plot ist noch nicht vollständig gerendert; Hover-Labels werden
             # erst dann gezeigt, wenn ein sauberer Hintergrund vorhanden ist.
-            annotation = self._hover_annotations.get(ax)
-            if annotation is not None and annotation.get_visible():
-                annotation.set_visible(False)
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(canvas), redraw=False)
             canvas.draw_idle()
             return
 
@@ -2243,29 +2338,19 @@ class ControlExplorerApp(tk.Tk):
             return
 
         kind = data["kind"]
-        if kind.startswith("bode") and xdata > 0:
-            idx = self._nearest_sorted_index(x, xdata)
-        elif kind == "step":
-            idx = self._nearest_sorted_index(x, xdata)
-        else:
-            x_span = max(abs(ax.get_xlim()[1] - ax.get_xlim()[0]), np.finfo(float).eps)
-            y_span = max(abs(ax.get_ylim()[1] - ax.get_ylim()[0]), np.finfo(float).eps)
-            stride = max(1, int(np.ceil(x.size / 1200)))
-            coarse_indices = np.arange(0, x.size, stride)
-            coarse_distance = (
-                ((x[coarse_indices] - xdata) / x_span) ** 2
-                + ((y[coarse_indices] - ydata) / y_span) ** 2
-            )
-            coarse_idx = int(coarse_indices[int(np.argmin(coarse_distance))])
-            start = max(0, coarse_idx - stride)
-            stop = min(x.size, coarse_idx + stride + 1)
-            local_distance = (
-                ((x[start:stop] - xdata) / x_span) ** 2
-                + ((y[start:stop] - ydata) / y_span) ** 2
-            )
-            idx = start + int(np.argmin(local_distance))
+        idx = self._nearest_hover_index(ax, x, y, event_x, event_y)
+        if idx is None:
+            self._hide_hover_annotations(axes=self._hover_axes_for_canvas(canvas), redraw=True)
+            return
 
-        if self._last_hover_target == (ax, idx) and self._hover_annotations[ax].get_visible():
+        annotation = self._hover_annotations[ax]
+        marker = self._hover_markers.get(ax)
+        if (
+            self._last_hover_target == (ax, idx)
+            and annotation.get_visible()
+            and marker is not None
+            and marker.get_visible()
+        ):
             return
         self._last_hover_target = (ax, idx)
 
@@ -2337,22 +2422,58 @@ class ControlExplorerApp(tk.Tk):
             if annotation.get_visible() != should_be_visible:
                 annotation.set_visible(should_be_visible)
                 changed_axes.append(hover_ax)
+            hover_marker = self._hover_markers.get(hover_ax)
+            if hover_marker is not None and hover_marker.get_visible() != should_be_visible:
+                hover_marker.set_visible(should_be_visible)
+                changed_axes.append(hover_ax)
 
-        annotation = self._hover_annotations[ax]
         annotation.xy = (x[idx], y[idx])
         annotation.set_text(text)
+        if marker is not None:
+            marker.set_data([x[idx]], [y[idx]])
+            marker.set_visible(True)
         self._position_hover_annotation(ax, annotation, x[idx], y[idx])
         self._draw_hover_axes(changed_axes)
 
-    @staticmethod
-    def _nearest_sorted_index(values, target):
-        index = int(np.searchsorted(values, target))
-        if index <= 0:
-            return 0
-        if index >= len(values):
-            return len(values) - 1
-        before = index - 1
-        return before if abs(target - values[before]) <= abs(values[index] - target) else index
+    def _nearest_hover_index(self, ax, x, y, event_x, event_y):
+        """
+        Liefert den Datenindex, dessen gezeichneter Punkt der Mausposition am
+        nächsten liegt. Die Distanz wird in Pixeln gemessen, nicht in Datenkoordinaten.
+        Dadurch funktioniert das gleich für lineare, logarithmische und komplexe Plots.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return None
+
+        indices = np.flatnonzero(finite)
+        try:
+            display_points = ax.transData.transform(np.column_stack((x[indices], y[indices])))
+        except Exception:
+            return None
+
+        display_finite = np.isfinite(display_points[:, 0]) & np.isfinite(display_points[:, 1])
+        if not np.any(display_finite):
+            return None
+
+        indices = indices[display_finite]
+        display_points = display_points[display_finite]
+        bbox = ax.bbox
+        visible_margin = 20.0
+        visible = (
+            (display_points[:, 0] >= bbox.x0 - visible_margin)
+            & (display_points[:, 0] <= bbox.x1 + visible_margin)
+            & (display_points[:, 1] >= bbox.y0 - visible_margin)
+            & (display_points[:, 1] <= bbox.y1 + visible_margin)
+        )
+        if np.any(visible):
+            indices = indices[visible]
+            display_points = display_points[visible]
+
+        mouse = np.array([event_x, event_y], dtype=float)
+        distances = np.sum((display_points - mouse) ** 2, axis=1)
+        return int(indices[int(np.argmin(distances))])
 
     def _add_entry(self, parent, label, variable, row, col):
         frame = ttk.Frame(parent)
