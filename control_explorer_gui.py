@@ -18,6 +18,7 @@ import webbrowser
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
+from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
@@ -145,6 +146,8 @@ class ControlExplorerApp(tk.Tk):
         self._hover_annotations = {}
         self._hover_markers = {}
         self._hover_canvas_backgrounds = {}
+        self._hover_background_capture_canvases = set()
+        self._hover_redraw_after_ids = {}
         self._last_hover_target = (None, None)
         self._hover_interaction_active = False
         self._root_locus_click_data = None
@@ -470,6 +473,12 @@ class ControlExplorerApp(tk.Tk):
     def _on_close(self):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
+        for after_id in list(self._hover_redraw_after_ids.values()):
+            try:
+                self.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self._hover_redraw_after_ids.clear()
         self._save_settings()
         native_icon_handles = list(self._native_icon_handles)
         self.destroy()
@@ -1424,6 +1433,7 @@ class ControlExplorerApp(tk.Tk):
             self.canvas_disturbance,
         ):
             canvas.mpl_connect("motion_notify_event", self._on_plot_hover)
+            canvas.mpl_connect("draw_event", self._on_plot_draw)
             canvas.mpl_connect("button_press_event", self._on_plot_interaction_start)
             canvas.mpl_connect("button_release_event", self._on_plot_interaction_end)
             canvas.mpl_connect("scroll_event", self._on_plot_interaction_scroll)
@@ -1944,6 +1954,9 @@ class ControlExplorerApp(tk.Tk):
     def _hover_axes_for_canvas(self, canvas):
         return [ax for ax in self._hover_annotations if ax.figure.canvas is canvas]
 
+    def _is_root_locus_canvas(self, canvas):
+        return hasattr(self, "canvas_root_locus") and canvas is self.canvas_root_locus
+
     def _hover_axis_from_event(self, event):
         if event.x is None or event.y is None:
             return None
@@ -2008,6 +2021,7 @@ class ControlExplorerApp(tk.Tk):
     def _capture_hover_background(self, canvas):
         artists = self._hover_artists_for_canvas(canvas)
         previous_visibility = [artist.get_visible() for artist in artists]
+        self._hover_background_capture_canvases.add(canvas)
         try:
             for artist in artists:
                 artist.set_visible(False)
@@ -2018,8 +2032,13 @@ class ControlExplorerApp(tk.Tk):
         finally:
             for artist, visible in zip(artists, previous_visibility):
                 artist.set_visible(visible)
+            self._hover_background_capture_canvases.discard(canvas)
 
     def _draw_hover_canvas(self, canvas):
+        if self._is_root_locus_canvas(canvas):
+            canvas.draw_idle()
+            return
+
         if canvas not in self._hover_canvas_backgrounds:
             self._capture_hover_background(canvas)
 
@@ -2047,6 +2066,36 @@ class ControlExplorerApp(tk.Tk):
         canvases = {ax.figure.canvas for ax in set(axes) if ax is not None}
         for canvas in canvases:
             self._draw_hover_canvas(canvas)
+
+    def _on_plot_draw(self, event):
+        canvas = event.canvas
+        if self._is_root_locus_canvas(canvas):
+            return
+
+        self._hover_canvas_backgrounds.pop(canvas, None)
+        if canvas in self._hover_background_capture_canvases:
+            return
+        if not self._visible_hover_artists_for_canvas(canvas):
+            return
+
+        old_after_id = self._hover_redraw_after_ids.pop(canvas, None)
+        if old_after_id is not None:
+            try:
+                self.after_cancel(old_after_id)
+            except tk.TclError:
+                pass
+
+        self._hover_redraw_after_ids[canvas] = self.after_idle(
+            lambda canvas=canvas: self._redraw_hover_after_full_draw(canvas)
+        )
+
+    def _redraw_hover_after_full_draw(self, canvas):
+        self._hover_redraw_after_ids.pop(canvas, None)
+        if canvas in self._hover_background_capture_canvases:
+            return
+        if not self._visible_hover_artists_for_canvas(canvas):
+            return
+        self._draw_hover_canvas(canvas)
 
     def _hide_hover_annotations(self, axes=None, redraw=True, discard_backgrounds=True):
         self._last_hover_target = (None, None)
@@ -2498,6 +2547,10 @@ class ControlExplorerApp(tk.Tk):
             return
 
         kind = data["kind"]
+        if kind == "root_locus":
+            self._show_root_locus_hover_at(ax, idx)
+            return
+
         annotation = self._hover_annotations[ax]
         marker = self._hover_markers.get(ax)
         if (
@@ -2546,25 +2599,6 @@ class ControlExplorerApp(tk.Tk):
                 + phase_text + "\n"
                 + response_text
             )
-        elif kind == "root_locus":
-            pole = complex(x[idx], y[idx])
-            natural_frequency = abs(pole)
-            damping_ratio = (
-                -pole.real / natural_frequency
-                if natural_frequency > np.finfo(float).eps
-                else np.nan
-            )
-            damping_text = (
-                rf"$\zeta = {damping_ratio:.5g}$"
-                if np.isfinite(damping_ratio)
-                else r"$\zeta$ nicht definiert"
-            )
-            text = (
-                rf"$K = {data['gain'][idx]:.5g}$" "\n"
-                rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
-                rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
-                + damping_text
-            )
         else:
             text = (
                 rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
@@ -2612,6 +2646,54 @@ class ControlExplorerApp(tk.Tk):
                     changed_axes.append(hover_ax)
 
         self._draw_hover_axes(changed_axes)
+
+    def _show_root_locus_hover_at(self, ax, idx):
+        data = self._hover_data.get(ax)
+        if data is None:
+            return
+
+        x = data["x"]
+        y = data["y"]
+        if not x.size or idx < 0 or idx >= x.size:
+            return
+
+        annotation = self._hover_annotations.get(ax)
+        marker = self._hover_markers.get(ax)
+        if annotation is None or marker is None:
+            return
+
+        if self._last_hover_target == (ax, idx) and annotation.get_visible() and marker.get_visible():
+            return
+        self._last_hover_target = (ax, idx)
+
+        pole = complex(x[idx], y[idx])
+        natural_frequency = abs(pole)
+        damping_ratio = (
+            -pole.real / natural_frequency
+            if natural_frequency > np.finfo(float).eps
+            else np.nan
+        )
+        damping_text = (
+            rf"$\zeta = {damping_ratio:.5g}$"
+            if np.isfinite(damping_ratio)
+            else r"$\zeta$ nicht definiert"
+        )
+        text = (
+            rf"$K = {data['gain'][idx]:.5g}$" "\n"
+            rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
+            rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
+            + damping_text
+        )
+
+        annotation.xy = (x[idx], y[idx])
+        annotation.set_text(text)
+        annotation.set_visible(True)
+        marker.set_data([x[idx]], [y[idx]])
+        marker.set_visible(True)
+        self._position_hover_annotation(ax, annotation, x[idx], y[idx])
+
+        self._hover_canvas_backgrounds.pop(ax.figure.canvas, None)
+        ax.figure.canvas.draw_idle()
 
     def _hover_display_points(self, ax):
         data = self._hover_data.get(ax)
@@ -4184,17 +4266,23 @@ class ControlExplorerApp(tk.Tk):
             "gains": locus_gains,
         }
 
+        locus_segments = []
         for branch in range(loci.shape[1]):
             branch_values = loci[:, branch]
             finite = np.isfinite(branch_values.real) & np.isfinite(branch_values.imag)
-            if np.any(finite):
-                ax.plot(
-                    branch_values.real[finite],
-                    branch_values.imag[finite],
-                    color="#1f77b4",
-                    linewidth=1.6,
-                    label="Wurzelortskurve" if branch == 0 else None,
+            branch_points = branch_values[finite]
+            if branch_points.size >= 2:
+                locus_segments.append(np.column_stack((branch_points.real, branch_points.imag)))
+        if locus_segments:
+            ax.add_collection(
+                LineCollection(
+                    locus_segments,
+                    colors="#1f77b4",
+                    linewidths=1.6,
+                    label="Wurzelortskurve",
+                    zorder=3,
                 )
+            )
         self._draw_root_locus_direction_arrows(ax, loci)
 
         open_poles = np.asarray(response.poles, dtype=complex).reshape(-1)
