@@ -1954,9 +1954,6 @@ class ControlExplorerApp(tk.Tk):
     def _hover_axes_for_canvas(self, canvas):
         return [ax for ax in self._hover_annotations if ax.figure.canvas is canvas]
 
-    def _is_root_locus_canvas(self, canvas):
-        return hasattr(self, "canvas_root_locus") and canvas is self.canvas_root_locus
-
     def _hover_axis_from_event(self, event):
         if event.x is None or event.y is None:
             return None
@@ -2035,10 +2032,6 @@ class ControlExplorerApp(tk.Tk):
             self._hover_background_capture_canvases.discard(canvas)
 
     def _draw_hover_canvas(self, canvas):
-        if self._is_root_locus_canvas(canvas):
-            canvas.draw_idle()
-            return
-
         if canvas not in self._hover_canvas_backgrounds:
             self._capture_hover_background(canvas)
 
@@ -2069,9 +2062,6 @@ class ControlExplorerApp(tk.Tk):
 
     def _on_plot_draw(self, event):
         canvas = event.canvas
-        if self._is_root_locus_canvas(canvas):
-            return
-
         self._hover_canvas_backgrounds.pop(canvas, None)
         if canvas in self._hover_background_capture_canvases:
             return
@@ -2547,10 +2537,6 @@ class ControlExplorerApp(tk.Tk):
             return
 
         kind = data["kind"]
-        if kind == "root_locus":
-            self._show_root_locus_hover_at(ax, idx)
-            return
-
         annotation = self._hover_annotations[ax]
         marker = self._hover_markers.get(ax)
         if (
@@ -2599,6 +2585,25 @@ class ControlExplorerApp(tk.Tk):
                 + phase_text + "\n"
                 + response_text
             )
+        elif kind == "root_locus":
+            pole = complex(x[idx], y[idx])
+            natural_frequency = abs(pole)
+            damping_ratio = (
+                -pole.real / natural_frequency
+                if natural_frequency > np.finfo(float).eps
+                else np.nan
+            )
+            damping_text = (
+                rf"$\zeta = {damping_ratio:.5g}$"
+                if np.isfinite(damping_ratio)
+                else r"$\zeta$ nicht definiert"
+            )
+            text = (
+                rf"$K = {data['gain'][idx]:.5g}$" "\n"
+                rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
+                rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
+                + damping_text
+            )
         else:
             text = (
                 rf"$t = {x[idx]:.5g}\,\mathrm{{s}}$" "\n"
@@ -2646,54 +2651,6 @@ class ControlExplorerApp(tk.Tk):
                     changed_axes.append(hover_ax)
 
         self._draw_hover_axes(changed_axes)
-
-    def _show_root_locus_hover_at(self, ax, idx):
-        data = self._hover_data.get(ax)
-        if data is None:
-            return
-
-        x = data["x"]
-        y = data["y"]
-        if not x.size or idx < 0 or idx >= x.size:
-            return
-
-        annotation = self._hover_annotations.get(ax)
-        marker = self._hover_markers.get(ax)
-        if annotation is None or marker is None:
-            return
-
-        if self._last_hover_target == (ax, idx) and annotation.get_visible() and marker.get_visible():
-            return
-        self._last_hover_target = (ax, idx)
-
-        pole = complex(x[idx], y[idx])
-        natural_frequency = abs(pole)
-        damping_ratio = (
-            -pole.real / natural_frequency
-            if natural_frequency > np.finfo(float).eps
-            else np.nan
-        )
-        damping_text = (
-            rf"$\zeta = {damping_ratio:.5g}$"
-            if np.isfinite(damping_ratio)
-            else r"$\zeta$ nicht definiert"
-        )
-        text = (
-            rf"$K = {data['gain'][idx]:.5g}$" "\n"
-            rf"$s = {pole.real:.5g} {pole.imag:+.5g}j$" "\n"
-            rf"$\omega_n = {natural_frequency:.5g}\,\mathrm{{rad/s}}$" "\n"
-            + damping_text
-        )
-
-        annotation.xy = (x[idx], y[idx])
-        annotation.set_text(text)
-        annotation.set_visible(True)
-        marker.set_data([x[idx]], [y[idx]])
-        marker.set_visible(True)
-        self._position_hover_annotation(ax, annotation, x[idx], y[idx])
-
-        self._hover_canvas_backgrounds.pop(ax.figure.canvas, None)
-        ax.figure.canvas.draw_idle()
 
     def _hover_display_points(self, ax):
         data = self._hover_data.get(ax)
