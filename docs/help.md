@@ -30,7 +30,7 @@ Bode-Grenzen und Frequenzeinheit werden unter **Einstellungen > Frequenz** geset
 
 ## Wurzelortskurve
 
-Die WOK basiert auf dem offenen Kreis ohne Vorfilter. Ein Klick auf die Kurve übernimmt den passenden Gain in den Parametercode bzw. in den markierten Gain-Parameter.
+Die WOK basiert auf dem offenen Kreis ohne Vorfilter und verwendet immer den separaten Verstärkungsfaktor `K_WOK`. Falls `K_WOK` im Modell fehlt, fragt der Explorer, ob `K_WOK = 1` zum Parametercode ergänzt und als Faktor vor den Regler gesetzt werden soll. Ein Klick auf die Kurve übernimmt den passenden Wert in `K_WOK`; beim Speichern eines Beispiels wird dieser Wert wieder auf `K_WOK = 1` zurückgesetzt.
 
 Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Totzeit kann optional über Padé approximiert werden.
 
