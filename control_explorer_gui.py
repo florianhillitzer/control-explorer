@@ -145,11 +145,15 @@ class ControlExplorerApp(tk.Tk):
         self._hover_data = {}
         self._hover_annotations = {}
         self._hover_markers = {}
-        self._hover_canvas_backgrounds = {}
-        self._hover_background_capture_canvases = set()
-        self._hover_redraw_after_ids = {}
+        self._hover_backgrounds = {}
+        self._hover_ready = set()
+        self._hover_after_id = None
+        self._pending_hover = None
         self._last_hover_target = (None, None)
         self._hover_interaction_active = False
+        self._root_locus_hover_tag = "control_explorer_root_locus_hover"
+        self._root_locus_hover_items = {}
+        self._root_locus_hover_index = None
         self._root_locus_click_data = None
         self._root_locus_prompt_declined_signature = None
 
@@ -473,12 +477,12 @@ class ControlExplorerApp(tk.Tk):
     def _on_close(self):
         if self._settings_save_after_id is not None:
             self.after_cancel(self._settings_save_after_id)
-        for after_id in list(self._hover_redraw_after_ids.values()):
+        if self._hover_after_id is not None:
             try:
-                self.after_cancel(after_id)
+                self.after_cancel(self._hover_after_id)
             except tk.TclError:
                 pass
-        self._hover_redraw_after_ids.clear()
+            self._hover_after_id = None
         self._save_settings()
         native_icon_handles = list(self._native_icon_handles)
         self.destroy()
@@ -1438,6 +1442,7 @@ class ControlExplorerApp(tk.Tk):
             canvas.mpl_connect("button_release_event", self._on_plot_interaction_end)
             canvas.mpl_connect("scroll_event", self._on_plot_interaction_scroll)
             canvas.mpl_connect("resize_event", self._on_plot_resize)
+            canvas.mpl_connect("figure_leave_event", self._on_plot_leave)
         self.canvas_root_locus.mpl_connect("button_press_event", self._on_root_locus_click)
 
         self.info_text = ScrolledText(self.tab_info, wrap=tk.WORD)
@@ -1936,6 +1941,7 @@ class ControlExplorerApp(tk.Tk):
             "_display_cache": None,
             **extra,
         }
+        self._hover_backgrounds.pop(ax, None)
 
         if not hasattr(ax, "_control_explorer_hover_callbacks"):
             ax._control_explorer_hover_callbacks = [
@@ -1980,12 +1986,11 @@ class ControlExplorerApp(tk.Tk):
         return self._toolbar_has_active_mode(toolbar)
 
     def _on_hover_axes_limits_changed(self, ax):
-        self._invalidate_hover_display_cache(self._hover_axes_for_canvas(ax.figure.canvas))
-        self._hide_hover_annotations(
-            axes=self._hover_axes_for_canvas(ax.figure.canvas),
-            redraw=not self._is_updating,
-            discard_backgrounds=False,
-        )
+        if self._is_updating:
+            return
+        axes = self._hover_axes_for_canvas(ax.figure.canvas)
+        self._invalidate_hover_display_cache(axes)
+        self._hide_hover_annotations(axes=axes, redraw=True, discard_backgrounds=True)
 
     def _invalidate_hover_display_cache(self, axes=None):
         if axes is None:
@@ -1995,97 +2000,366 @@ class ControlExplorerApp(tk.Tk):
             if data is not None:
                 data["_display_cache"] = None
             if ax is not None:
-                self._hover_canvas_backgrounds.pop(ax.figure.canvas, None)
+                self._hover_backgrounds.pop(ax, None)
 
-    def _hover_artists_for_canvas(self, canvas):
+    def _hover_artists_for_axis(self, ax):
         artists = []
-        for ax in self._hover_axes_for_canvas(canvas):
-            annotation = self._hover_annotations.get(ax)
-            marker = self._hover_markers.get(ax)
-            if annotation is not None:
-                artists.append(annotation)
-            if marker is not None:
-                artists.append(marker)
+        annotation = self._hover_annotations.get(ax)
+        marker = self._hover_markers.get(ax)
+        if annotation is not None:
+            artists.append(annotation)
+        if marker is not None:
+            artists.append(marker)
         return artists
 
-    def _visible_hover_artists_for_canvas(self, canvas):
-        return [
-            artist
-            for artist in self._hover_artists_for_canvas(canvas)
-            if artist.get_visible()
-        ]
+    def _is_root_locus_axis(self, ax):
+        return ax is self.__dict__.get("ax_root_locus")
 
-    def _capture_hover_background(self, canvas):
-        artists = self._hover_artists_for_canvas(canvas)
-        previous_visibility = [artist.get_visible() for artist in artists]
-        self._hover_background_capture_canvases.add(canvas)
+    def _root_locus_hover_widget(self):
+        canvas = self.__dict__.get("canvas_root_locus")
+        if canvas is None:
+            return None
         try:
-            for artist in artists:
-                artist.set_visible(False)
-            canvas.draw()
-            self._hover_canvas_backgrounds[canvas] = canvas.copy_from_bbox(canvas.figure.bbox)
+            return canvas.get_tk_widget()
         except Exception:
-            self._hover_canvas_backgrounds.pop(canvas, None)
-        finally:
-            for artist, visible in zip(artists, previous_visibility):
-                artist.set_visible(visible)
-            self._hover_background_capture_canvases.discard(canvas)
+            return None
 
-    def _draw_hover_canvas(self, canvas):
-        if canvas not in self._hover_canvas_backgrounds:
-            self._capture_hover_background(canvas)
+    def _ensure_root_locus_hover_items(self):
+        widget = self._root_locus_hover_widget()
+        if widget is None or not hasattr(widget, "create_oval"):
+            return None
 
-        background = self._hover_canvas_backgrounds.get(canvas)
-        if background is None:
+        items = self._root_locus_hover_items
+        required = {"marker", "box", "text", "measure"}
+        if required.issubset(items):
+            return items
+
+        tag = self._root_locus_hover_tag
+        try:
+            self._delete_root_locus_hover()
+            items = {
+                "marker": widget.create_oval(
+                    0,
+                    0,
+                    0,
+                    0,
+                    fill="#ffcc33",
+                    outline="#222222",
+                    width=1,
+                    state="hidden",
+                    tags=(tag,),
+                ),
+                "box": widget.create_rectangle(
+                    0,
+                    0,
+                    0,
+                    0,
+                    fill="white",
+                    outline="#555555",
+                    width=1,
+                    state="hidden",
+                    tags=(tag,),
+                ),
+                "text": widget.create_text(
+                    0,
+                    0,
+                    anchor="nw",
+                    justify="left",
+                    fill="#222222",
+                    font=("TkDefaultFont", 9),
+                    state="hidden",
+                    tags=(tag,),
+                ),
+                "measure": widget.create_text(
+                    -10000,
+                    -10000,
+                    anchor="nw",
+                    justify="left",
+                    fill="#222222",
+                    font=("TkDefaultFont", 9),
+                    state="normal",
+                    tags=(tag,),
+                ),
+            }
+        except tk.TclError:
+            self._root_locus_hover_items = {}
+            return None
+
+        self._root_locus_hover_items = items
+        return items
+
+    def _raise_root_locus_hover(self):
+        widget = self._root_locus_hover_widget()
+        if widget is None:
+            return False
+        try:
+            if any(not widget.type(item_id) for item_id in self._root_locus_hover_items.values()):
+                self._root_locus_hover_items = {}
+                self._root_locus_hover_index = None
+                return False
+            widget.tag_raise(self._root_locus_hover_tag)
+        except tk.TclError:
+            self._root_locus_hover_items = {}
+            self._root_locus_hover_index = None
+            return False
+        return True
+
+    def _redraw_root_locus_hover(self):
+        ax = self.__dict__.get("ax_root_locus")
+        idx = self._root_locus_hover_index
+        if ax is None or idx is None:
+            return
+        if ax not in self._hover_data:
+            self._hide_root_locus_hover()
+            return
+        self._show_root_locus_hover_at(ax, idx)
+
+    def _hide_root_locus_hover(self):
+        widget = self._root_locus_hover_widget()
+        if widget is not None:
+            for key, item_id in self._root_locus_hover_items.items():
+                if key == "measure":
+                    continue
+                try:
+                    widget.itemconfigure(item_id, state="hidden")
+                except tk.TclError:
+                    pass
+        self._root_locus_hover_index = None
+        if self._last_hover_target[0] is self.__dict__.get("ax_root_locus"):
+            self._last_hover_target = (None, None)
+
+    def _delete_root_locus_hover(self):
+        widget = self._root_locus_hover_widget()
+        if widget is not None:
+            try:
+                widget.delete(self._root_locus_hover_tag)
+            except tk.TclError:
+                pass
+        self._root_locus_hover_items = {}
+        self._root_locus_hover_index = None
+
+    def _root_locus_display_points(self, ax):
+        data = self._hover_data.get(ax)
+        if data is None:
+            return None, None
+
+        bbox = ax.bbox
+        cache_key = (
+            tuple(float(value) for value in ax.get_xlim()),
+            tuple(float(value) for value in ax.get_ylim()),
+            tuple(float(value) for value in bbox.bounds),
+        )
+        cached = data.get("_display_cache")
+        if cached is not None and cached[0] == cache_key:
+            return cached[1], cached[2]
+
+        x = data["x"]
+        y = data["y"]
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            indices = np.array([], dtype=int)
+            display_points = np.empty((0, 2), dtype=float)
+            data["_display_cache"] = (cache_key, indices, display_points)
+            return indices, display_points
+
+        indices = np.flatnonzero(finite)
+        try:
+            display_points = ax.transData.transform(np.column_stack((x[indices], y[indices])))
+        except Exception:
+            return None, None
+
+        display_finite = np.isfinite(display_points[:, 0]) & np.isfinite(display_points[:, 1])
+        indices = indices[display_finite]
+        display_points = display_points[display_finite]
+        data["_display_cache"] = (cache_key, indices, display_points)
+        return indices, display_points
+
+    def _nearest_root_locus_hover_index(self, ax, event_x, event_y):
+        indices, display_points = self._root_locus_display_points(ax)
+        if indices is None or display_points is None or not len(indices):
+            return None
+
+        dx = display_points[:, 0] - event_x
+        dy = display_points[:, 1] - event_y
+        distances = dx * dx + dy * dy
+        return int(indices[int(np.argmin(distances))])
+
+    def _root_locus_hover_text(self, data, idx):
+        pole = complex(data["x"][idx], data["y"][idx])
+        natural_frequency = abs(pole)
+        damping_ratio = (
+            -pole.real / natural_frequency
+            if natural_frequency > np.finfo(float).eps
+            else np.nan
+        )
+        damping_text = (
+            f"\u03b6 = {damping_ratio:.5g}"
+            if np.isfinite(damping_ratio)
+            else "\u03b6 nicht definiert"
+        )
+        return (
+            f"K = {data['gain'][idx]:.5g}\n"
+            f"s = {pole.real:.5g} {pole.imag:+.5g}j\n"
+            f"\u03c9\u2099 = {natural_frequency:.5g} rad/s\n"
+            f"{damping_text}"
+        )
+
+    def _show_root_locus_hover_at(self, ax, idx):
+        data = self._hover_data.get(ax)
+        widget = self._root_locus_hover_widget()
+        items = self._ensure_root_locus_hover_items()
+        if data is None or widget is None or items is None:
+            return
+
+        x = data["x"]
+        y = data["y"]
+        if not x.size or idx < 0 or idx >= x.size:
+            self._hide_root_locus_hover()
             return
 
         try:
-            canvas.restore_region(background)
-            for artist in self._visible_hover_artists_for_canvas(canvas):
-                artist.axes.draw_artist(artist)
-            canvas.blit(canvas.figure.bbox)
-            canvas.flush_events()
+            display_x, display_y = ax.transData.transform((x[idx], y[idx]))
         except Exception:
-            self._hover_canvas_backgrounds.pop(canvas, None)
+            self._hide_root_locus_hover()
+            return
+
+        width = max(int(widget.winfo_width()), 1)
+        height = max(int(widget.winfo_height()), 1)
+        try:
+            figure_width, figure_height = ax.figure.canvas.get_width_height()
+        except Exception:
+            figure_width, figure_height = width, height
+        scale_x = width / max(float(figure_width), np.finfo(float).eps)
+        scale_y = height / max(float(figure_height), np.finfo(float).eps)
+        tk_x = float(display_x) * scale_x
+        tk_y = height - float(display_y) * scale_y
+        if not np.isfinite(tk_x) or not np.isfinite(tk_y):
+            self._hide_root_locus_hover()
+            return
+
+        text = self._root_locus_hover_text(data, idx)
+        marker_radius = 4.0
+        pad = 5.0
+        offset = 12.0
+
+        try:
+            widget.itemconfigure(items["measure"], text=text, state="normal")
+            widget.coords(items["measure"], -10000, -10000)
+            text_bbox = widget.bbox(items["measure"])
+            if text_bbox is None:
+                return
+
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            box_width = text_width + 2 * pad
+            box_height = text_height + 2 * pad
+
+            box_x = tk_x + offset
+            box_y = tk_y + offset
+            if box_x + box_width > width - 2:
+                box_x = tk_x - offset - box_width
+            if box_y + box_height > height - 2:
+                box_y = tk_y - offset - box_height
+            box_x = min(max(box_x, 2.0), max(width - box_width - 2.0, 2.0))
+            box_y = min(max(box_y, 2.0), max(height - box_height - 2.0, 2.0))
+
+            widget.coords(
+                items["marker"],
+                tk_x - marker_radius,
+                tk_y - marker_radius,
+                tk_x + marker_radius,
+                tk_y + marker_radius,
+            )
+            widget.coords(items["box"], box_x, box_y, box_x + box_width, box_y + box_height)
+            widget.coords(items["text"], box_x + pad, box_y + pad)
+            widget.itemconfigure(items["text"], text=text)
+            widget.itemconfigure(items["marker"], state="normal")
+            widget.itemconfigure(items["box"], state="normal")
+            widget.itemconfigure(items["text"], state="normal")
+            widget.tag_raise(items["marker"])
+            widget.tag_raise(items["box"])
+            widget.tag_raise(items["text"])
+        except tk.TclError:
+            self._delete_root_locus_hover()
+            return
+
+        self._root_locus_hover_index = idx
+        self._last_hover_target = (ax, idx)
+
+    def _on_root_locus_hover(self, event):
+        canvas = event.canvas
+        ax = self.__dict__.get("ax_root_locus")
+        if self._canvas_hover_blocked(canvas):
+            self._hide_root_locus_hover()
+            return
+        if (
+            ax is None
+            or event.x is None
+            or event.y is None
+            or not np.isfinite(event.x)
+            or not np.isfinite(event.y)
+            or not ax.bbox.contains(event.x, event.y)
+            or ax not in self._hover_data
+        ):
+            self._hide_root_locus_hover()
+            return
+
+        idx = self._nearest_root_locus_hover_index(ax, event.x, event.y)
+        if idx is None:
+            self._hide_root_locus_hover()
+            return
+        if self._root_locus_hover_index == idx and self._root_locus_hover_items:
+            if self._raise_root_locus_hover():
+                return
+
+        self._show_root_locus_hover_at(ax, idx)
+
+    def _cache_hover_backgrounds(self, event):
+        canvas = event.canvas
+        self._hover_ready.add(canvas)
+        for ax in canvas.figure.axes:
+            if ax in self._hover_annotations:
+                if any(artist.get_visible() for artist in self._hover_artists_for_axis(ax)):
+                    continue
+                try:
+                    self._hover_backgrounds[ax] = canvas.copy_from_bbox(ax.bbox)
+                except Exception:
+                    self._hover_backgrounds.pop(ax, None)
 
     def _draw_hover_axes(self, axes):
         """
-        Zeichnet Hover-Annotationen robust über Matplotlibs normalen Draw-Pfad.
-
-        Das ist absichtlich etwas konservativer als Blitting: Die bisherigen
-        Hintergrund-Caches waren empfindlich gegenüber Toolbar-Zoom, Pan,
-        Layout-Änderungen und Draw-Events.
+        Zeichnet Hover-Annotationen performant per Achsen-Blitting.
         """
-        canvases = {ax.figure.canvas for ax in set(axes) if ax is not None}
-        for canvas in canvases:
-            self._draw_hover_canvas(canvas)
+        for ax in set(axes):
+            if ax not in self._hover_annotations:
+                continue
+
+            canvas = ax.figure.canvas
+            background = self._hover_backgrounds.get(ax)
+            if background is None:
+                for artist in self._hover_artists_for_axis(ax):
+                    if artist.get_visible():
+                        artist.set_visible(False)
+                canvas.draw_idle()
+                continue
+
+            try:
+                canvas.restore_region(background)
+                for artist in self._hover_artists_for_axis(ax):
+                    if artist.get_visible():
+                        ax.draw_artist(artist)
+                canvas.blit(ax.bbox)
+            except Exception:
+                self._hover_backgrounds.pop(ax, None)
+                for artist in self._hover_artists_for_axis(ax):
+                    if artist.get_visible():
+                        artist.set_visible(False)
+                canvas.draw_idle()
 
     def _on_plot_draw(self, event):
-        canvas = event.canvas
-        self._hover_canvas_backgrounds.pop(canvas, None)
-        if canvas in self._hover_background_capture_canvases:
-            return
-        if not self._visible_hover_artists_for_canvas(canvas):
-            return
-
-        old_after_id = self._hover_redraw_after_ids.pop(canvas, None)
-        if old_after_id is not None:
-            try:
-                self.after_cancel(old_after_id)
-            except tk.TclError:
-                pass
-
-        self._hover_redraw_after_ids[canvas] = self.after_idle(
-            lambda canvas=canvas: self._redraw_hover_after_full_draw(canvas)
-        )
-
-    def _redraw_hover_after_full_draw(self, canvas):
-        self._hover_redraw_after_ids.pop(canvas, None)
-        if canvas in self._hover_background_capture_canvases:
-            return
-        if not self._visible_hover_artists_for_canvas(canvas):
-            return
-        self._draw_hover_canvas(canvas)
+        self._cache_hover_backgrounds(event)
+        if event.canvas is self.__dict__.get("canvas_root_locus"):
+            self._redraw_root_locus_hover()
 
     def _hide_hover_annotations(self, axes=None, redraw=True, discard_backgrounds=True):
         self._last_hover_target = (None, None)
@@ -2095,8 +2369,10 @@ class ControlExplorerApp(tk.Tk):
         else:
             axes_to_hide = [ax for ax in axes if ax in self._hover_annotations]
 
-        canvases = set()
+        changed_axes = []
         for ax in axes_to_hide:
+            if self._is_root_locus_axis(ax):
+                self._hide_root_locus_hover()
             annotation = self._hover_annotations.get(ax)
             marker = self._hover_markers.get(ax)
             changed = False
@@ -2107,24 +2383,33 @@ class ControlExplorerApp(tk.Tk):
                 marker.set_visible(False)
                 changed = True
             if changed:
-                canvases.add(ax.figure.canvas)
+                changed_axes.append(ax)
             if discard_backgrounds:
                 data = self._hover_data.get(ax)
                 if data is not None:
                     data["_display_cache"] = None
-                self._hover_canvas_backgrounds.pop(ax.figure.canvas, None)
+                self._hover_backgrounds.pop(ax, None)
 
         if redraw:
-            for canvas in canvases:
-                self._draw_hover_canvas(canvas)
+            self._draw_hover_axes(changed_axes)
 
     def _clear_hover_annotations(self, axes=None, redraw=True):
+        if self._hover_after_id is not None:
+            try:
+                self.after_cancel(self._hover_after_id)
+            except tk.TclError:
+                pass
+            self._hover_after_id = None
+        self._pending_hover = None
         self._last_hover_target = (None, None)
 
         if axes is None:
             axes_to_clear = list(self._hover_annotations.keys())
         else:
             axes_to_clear = list(axes)
+
+        if axes is None or any(self._is_root_locus_axis(ax) for ax in axes_to_clear):
+            self._delete_root_locus_hover()
 
         canvases = set()
         for ax in axes_to_clear:
@@ -2145,7 +2430,8 @@ class ControlExplorerApp(tk.Tk):
                     pass
                 canvases.add(ax.figure.canvas)
             self._hover_data.pop(ax, None)
-            self._hover_canvas_backgrounds.pop(ax.figure.canvas, None)
+            self._hover_backgrounds.pop(ax, None)
+            self._hover_ready.discard(ax.figure.canvas)
 
         if redraw:
             for canvas in canvases:
@@ -2418,7 +2704,6 @@ class ControlExplorerApp(tk.Tk):
             annotation.set_ha("left")
             annotation.set_va("bottom")
 
-
     def _on_plot_interaction_start(self, event):
         self._hover_interaction_active = True
         self._hide_hover_annotations(axes=self._hover_axes_for_canvas(event.canvas), redraw=True)
@@ -2458,6 +2743,10 @@ class ControlExplorerApp(tk.Tk):
 
     def _on_plot_hover(self, event):
         canvas = event.canvas
+        if canvas is self.__dict__.get("canvas_root_locus"):
+            self._on_root_locus_hover(event)
+            return
+
         if self._canvas_hover_blocked(canvas):
             self._hide_hover_annotations(
                 axes=self._hover_axes_for_canvas(canvas),
@@ -2481,7 +2770,48 @@ class ControlExplorerApp(tk.Tk):
             )
             return
 
-        idx = self._nearest_hover_index(ax, event.x, event.y)
+        if canvas not in self._hover_ready or ax not in self._hover_backgrounds:
+            return
+
+        xdata = getattr(event, "xdata", None)
+        ydata = getattr(event, "ydata", None)
+        if getattr(event, "inaxes", None) is not ax or xdata is None or ydata is None:
+            try:
+                xdata, ydata = ax.transData.inverted().transform((event.x, event.y))
+            except Exception:
+                return
+
+        self._pending_hover = (ax, xdata, ydata, canvas)
+        if self._hover_after_id is None:
+            self._hover_after_id = self.after(25, self._process_plot_hover)
+
+    def _process_plot_hover(self):
+        self._hover_after_id = None
+        if self._is_updating:
+            self._pending_hover = None
+            return
+        if self._pending_hover is None:
+            return
+
+        ax, xdata, ydata, canvas = self._pending_hover
+        self._pending_hover = None
+
+        if (
+            ax not in self._hover_data
+            or ax not in self._hover_backgrounds
+            or xdata is None
+            or ydata is None
+            or not np.isfinite(xdata)
+            or not np.isfinite(ydata)
+        ):
+            self._hide_hover_annotations(
+                axes=self._hover_axes_for_canvas(canvas),
+                redraw=True,
+                discard_backgrounds=False,
+            )
+            return
+
+        idx = self._nearest_hover_index(ax, xdata, ydata)
         if idx is None:
             self._hide_hover_annotations(
                 axes=self._hover_axes_for_canvas(canvas),
@@ -2541,7 +2871,7 @@ class ControlExplorerApp(tk.Tk):
         marker = self._hover_markers.get(ax)
         if (
             self._last_hover_target == (ax, idx)
-            and canvas in self._hover_canvas_backgrounds
+            and ax in self._hover_backgrounds
             and annotation.get_visible()
             and marker is not None
             and marker.get_visible()
@@ -2652,70 +2982,48 @@ class ControlExplorerApp(tk.Tk):
 
         self._draw_hover_axes(changed_axes)
 
-    def _hover_display_points(self, ax):
+    def _nearest_hover_index(self, ax, xdata, ydata):
         data = self._hover_data.get(ax)
         if data is None:
-            return None, None
-
-        bbox = ax.bbox
-        cache_key = (
-            tuple(float(value) for value in ax.get_xlim()),
-            tuple(float(value) for value in ax.get_ylim()),
-            ax.get_xscale(),
-            ax.get_yscale(),
-            tuple(float(value) for value in bbox.bounds),
-        )
-        cached = data.get("_display_cache")
-        if cached is not None and cached[0] == cache_key:
-            return cached[1], cached[2]
-
-        x = np.asarray(data["x"], dtype=float)
-        y = np.asarray(data["y"], dtype=float)
-        finite = np.isfinite(x) & np.isfinite(y)
-        if not np.any(finite):
-            indices = np.array([], dtype=int)
-            display_points = np.empty((0, 2), dtype=float)
-            data["_display_cache"] = (cache_key, indices, display_points)
-            return indices, display_points
-
-        indices = np.flatnonzero(finite)
-        try:
-            display_points = ax.transData.transform(np.column_stack((x[indices], y[indices])))
-        except Exception:
-            return None, None
-
-        display_finite = np.isfinite(display_points[:, 0]) & np.isfinite(display_points[:, 1])
-        indices = indices[display_finite]
-        display_points = display_points[display_finite]
-        if not indices.size:
-            data["_display_cache"] = (cache_key, indices, display_points)
-            return indices, display_points
-
-        visible_margin = 20.0
-        visible = (
-            (display_points[:, 0] >= bbox.x0 - visible_margin)
-            & (display_points[:, 0] <= bbox.x1 + visible_margin)
-            & (display_points[:, 1] >= bbox.y0 - visible_margin)
-            & (display_points[:, 1] <= bbox.y1 + visible_margin)
-        )
-        indices = indices[visible]
-        display_points = display_points[visible]
-        data["_display_cache"] = (cache_key, indices, display_points)
-        return indices, display_points
-
-    def _nearest_hover_index(self, ax, event_x, event_y):
-        """
-        Liefert den Datenindex, dessen gezeichneter Punkt der Mausposition am
-        nächsten liegt. Die Distanz wird in Pixeln gemessen, nicht in Datenkoordinaten.
-        Dadurch funktioniert das gleich für lineare, logarithmische und komplexe Plots.
-        """
-        indices, display_points = self._hover_display_points(ax)
-        if indices is None or display_points is None or not len(indices):
             return None
 
-        mouse = np.array([event_x, event_y], dtype=float)
-        distances = np.sum((display_points - mouse) ** 2, axis=1)
-        return int(indices[int(np.argmin(distances))])
+        x = data["x"]
+        y = data["y"]
+        if not x.size:
+            return None
+
+        kind = data["kind"]
+        if kind.startswith("bode") and xdata > 0:
+            return self._nearest_sorted_index(x, xdata)
+        if kind == "step":
+            return self._nearest_sorted_index(x, xdata)
+
+        x_span = max(abs(ax.get_xlim()[1] - ax.get_xlim()[0]), np.finfo(float).eps)
+        y_span = max(abs(ax.get_ylim()[1] - ax.get_ylim()[0]), np.finfo(float).eps)
+        stride = max(1, int(np.ceil(x.size / 1200)))
+        coarse_indices = np.arange(0, x.size, stride)
+        coarse_distance = (
+            ((x[coarse_indices] - xdata) / x_span) ** 2
+            + ((y[coarse_indices] - ydata) / y_span) ** 2
+        )
+        coarse_idx = int(coarse_indices[int(np.argmin(coarse_distance))])
+        start = max(0, coarse_idx - stride)
+        stop = min(x.size, coarse_idx + stride + 1)
+        local_distance = (
+            ((x[start:stop] - xdata) / x_span) ** 2
+            + ((y[start:stop] - ydata) / y_span) ** 2
+        )
+        return start + int(np.argmin(local_distance))
+
+    @staticmethod
+    def _nearest_sorted_index(values, target):
+        index = int(np.searchsorted(values, target))
+        if index <= 0:
+            return 0
+        if index >= len(values):
+            return len(values) - 1
+        before = index - 1
+        return before if abs(target - values[before]) <= abs(values[index] - target) else index
 
     def _add_entry(self, parent, label, variable, row, col):
         frame = ttk.Frame(parent)
@@ -2894,10 +3202,7 @@ class ControlExplorerApp(tk.Tk):
         root_locus_gain_min = float(eval(self.root_locus_gain_min_var.get(), env, env))
         root_locus_gain_max = float(eval(self.root_locus_gain_max_var.get(), env, env))
         root_locus_points = int(float(eval(self.root_locus_points_var.get(), env, env)))
-        if selected_gain_parameter:
-            root_locus_marker_gain = float(env[selected_gain_parameter])
-        else:
-            root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
+        root_locus_marker_gain = float(eval(self.root_locus_marker_gain_var.get(), env, env))
 
         t_max = float(eval(self.t_max_var.get(), env, env))
         t_points = int(float(eval(self.t_points_var.get(), env, env)))
@@ -3407,9 +3712,6 @@ class ControlExplorerApp(tk.Tk):
                 data["root_locus_gain_candidates"],
                 data["root_locus_gain_parameter"],
             )
-            marker_text = f"{data['root_locus_marker_gain']:.12g}"
-            if self.root_locus_marker_gain_var.get() != marker_text:
-                self.root_locus_marker_gain_var.set(marker_text)
             self._update_block_diagram(data)
             self._update_latex_preview(data)
 
