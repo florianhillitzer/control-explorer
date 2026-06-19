@@ -158,7 +158,7 @@ class ControlExplorerApp(tk.Tk):
 
         self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung")
         self._set_window_icon()
-        self.geometry("1300x820")
+        self.geometry("1600x1000")
         self.minsize(1050, 650)
 
         self._create_variables()
@@ -1178,7 +1178,7 @@ class ControlExplorerApp(tk.Tk):
         block_frame = ttk.LabelFrame(parent, text="Standardregelkreis")
         block_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         block_frame.columnconfigure(0, weight=1)
-        self.fig_block = Figure(figsize=(4.8, 1.65), dpi=100)
+        self.fig_block = Figure(figsize=(4.8, 1.5), dpi=100)
         self.ax_block = self.fig_block.add_subplot(111)
         self.ax_block.axis("off")
         self.canvas_block = FigureCanvasTkAgg(self.fig_block, master=block_frame)
@@ -1231,10 +1231,6 @@ class ControlExplorerApp(tk.Tk):
             "1.0",
             "K_R = 2.0\n"
             "T_t = np.pi / 4\n"
-            "\n"
-            "# Beispiele:\n"
-            "# T1 = 1.0\n"
-            "# Kp = 1.5\n"
         )
 
         ttk.Label(parent, text="Übertragungsfunktionen").grid(row=11, column=0, sticky="w")
