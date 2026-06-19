@@ -138,7 +138,7 @@ Path=$APP_DIR
 Terminal=false
 Categories=Education;Science;Engineering;
 StartupNotify=true
-StartupWMClass=ControlExplorer
+StartupWMClass=Controlexplorer
 DESKTOP_EOF
 
 chmod +x "$DESKTOP_FILE"
@@ -152,7 +152,7 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 ```
 
-Danach sollte `Control Explorer` im App-Menü der Desktop-Umgebung auffindbar sein. Falls der Eintrag oder das Icon nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden. Für ein korrektes Taskleisten-Icon sollte die Anwendung über diesen Menüeintrag gestartet werden; der Desktop verknüpft das laufende Tk-Fenster über `StartupWMClass=ControlExplorer` mit dem installierten Icon.
+Danach sollte `Control Explorer` im App-Menü der Desktop-Umgebung auffindbar sein. Falls der Eintrag oder das Icon nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden. Für ein korrektes Taskleisten-Icon sollte die Anwendung über diesen Menüeintrag gestartet werden; der Desktop verknüpft das laufende Tk-Fenster über `StartupWMClass=Controlexplorer` mit dem installierten Icon.
 
 ## Warum kein einzelnes EXE-Archiv?
 
