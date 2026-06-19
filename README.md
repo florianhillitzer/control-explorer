@@ -118,11 +118,14 @@ Damit Control Explorer unter Linux wie ein normales Programm im App-Menü ersche
 ```bash
 APP_DIR="$(pwd)/dist/ControlExplorer"
 EXEC_PATH="$APP_DIR/ControlExplorer"
-ICON_PATH="$APP_DIR/control_explorer_icon.png"
+ICON_SOURCE="$APP_DIR/_internal/control_explorer_icon.png"
+ICON_TARGET="$HOME/.local/share/icons/hicolor/256x256/apps/control-explorer.png"
 DESKTOP_FILE="$HOME/.local/share/applications/control-explorer.desktop"
 
 mkdir -p "$HOME/.local/share/applications"
+mkdir -p "$(dirname "$ICON_TARGET")"
 chmod +x "$EXEC_PATH"
+cp "$ICON_SOURCE" "$ICON_TARGET"
 
 cat > "$DESKTOP_FILE" <<DESKTOP_EOF
 [Desktop Entry]
@@ -130,11 +133,12 @@ Type=Application
 Name=Control Explorer
 Comment=Interactive control systems explorer
 Exec=$EXEC_PATH
-Icon=$ICON_PATH
+Icon=control-explorer
 Path=$APP_DIR
 Terminal=false
 Categories=Education;Science;Engineering;
 StartupNotify=true
+StartupWMClass=Controlexplorer
 DESKTOP_EOF
 
 chmod +x "$DESKTOP_FILE"
@@ -142,9 +146,13 @@ chmod +x "$DESKTOP_FILE"
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$HOME/.local/share/applications" || true
 fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" || true
+fi
 ```
 
-Danach sollte `Control Explorer` im App-Menü der Desktop-Umgebung auffindbar sein. Falls der Eintrag nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden.
+Danach sollte `Control Explorer` im App-Menü der Desktop-Umgebung auffindbar sein. Falls der Eintrag oder das Icon nicht sofort erscheint, hilft meistens einmaliges Ab- und Anmelden. Für ein korrektes Taskleisten-Icon sollte die Anwendung über diesen Menüeintrag gestartet werden; der Desktop verknüpft das laufende Tk-Fenster über `StartupWMClass=Controlexplorer` mit dem installierten Icon.
 
 ## Warum kein einzelnes EXE-Archiv?
 
@@ -164,7 +172,7 @@ Vor einer Veröffentlichung:
 1. `dist\ControlExplorer\ControlExplorer.exe` auf einem Windows-Rechner ohne Python testen.
 2. `dist/ControlExplorer/ControlExplorer` auf einem Linux-Rechner ohne aktivierte Python-Umgebung testen.
 3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung, Hover sowie Beispiel-Speichern/Laden prüfen.
-4. Prüfen, dass `docs`, `toolbar_icons`, `control_explorer_icon.png`, `mrm_logo.png`, `VERSION`, `LICENSE` und `NOTICE` im Build-Ordner vorhanden sind.
+4. Prüfen, dass `docs`, `toolbar_icons`, `control_explorer_icon.png`, `mrm_logo.png`, `VERSION`, `LICENSE` und `NOTICE` im Build-Ordner unter `_internal` vorhanden sind.
 5. Den vollständigen Ordner als ZIP- oder Tar-Archiv veröffentlichen, beispielsweise über GitHub Releases.
 6. Für eine professionelle öffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
 

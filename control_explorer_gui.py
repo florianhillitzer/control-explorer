@@ -139,7 +139,7 @@ class ControlExplorerApp(tk.Tk):
 
     def __init__(self):
         self._set_windows_app_id()
-        super().__init__()
+        super().__init__(baseName="control-explorer", className="ControlExplorer")
         self._native_icon_handles = []
 
         self._after_id = None
