@@ -135,6 +135,7 @@ Path=$APP_DIR
 Terminal=false
 Categories=Education;Science;Engineering;
 StartupNotify=true
+StartupWMClass=ControlExplorer
 DESKTOP_EOF
 
 chmod +x "$DESKTOP_FILE"
