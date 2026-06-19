@@ -563,7 +563,11 @@ class ControlExplorerApp(tk.Tk):
         button_frame = ttk.Frame(dialog)
         button_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
         button_frame.columnconfigure(0, weight=1)
-        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            button_frame,
+            text="Aktualisieren",
+            command=lambda: self.update_plots(force_root_locus_prompt=True),
+        ).grid(row=0, column=0, sticky="w")
         ttk.Button(button_frame, text="Werkseinstellungen", command=self.reset_settings).grid(row=0, column=1, padx=6)
         ttk.Button(button_frame, text="Schließen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=2, sticky="e")
 
@@ -1257,7 +1261,11 @@ class ControlExplorerApp(tk.Tk):
         button_frame.grid(row=14, column=0, sticky="ew", pady=(4, 8))
         button_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew")
+        ttk.Button(
+            button_frame,
+            text="Aktualisieren",
+            command=lambda: self.update_plots(force_root_locus_prompt=True),
+        ).grid(row=0, column=0, sticky="ew")
 
         help_text = (
             "Eingabehinweise:\n"
@@ -1492,7 +1500,9 @@ class ControlExplorerApp(tk.Tk):
         if not self._expression_uses_name(system_expr, gain_name):
             self.controller_enabled_var.set(True)
             self.controller_text.delete("1.0", tk.END)
-            if controller_enabled and controller_expr and controller_expr != "1":
+            if self._expression_uses_name(controller_expr, gain_name):
+                self.controller_text.insert("1.0", controller_expr)
+            elif controller_expr and controller_expr != "1":
                 self.controller_text.insert("1.0", f"{gain_name} * ({controller_expr})")
             else:
                 self.controller_text.insert("1.0", gain_name)
@@ -2705,6 +2715,12 @@ class ControlExplorerApp(tk.Tk):
 
     def _on_notebook_tab_changed(self, _event):
         self._clear_hover_annotations(redraw=True)
+        try:
+            active_tab = self.notebook.index(self.notebook.select())
+        except tk.TclError:
+            active_tab = None
+        if active_tab == 2:
+            self._root_locus_prompt_declined_signature = None
         self.schedule_update()
 
     # ------------------------------------------------------------------
@@ -3258,6 +3274,24 @@ class ControlExplorerApp(tk.Tk):
             return self._call_control("feedback für S(s)", ct.feedback, one, L_time)
         raise ValueError(f"Unbekannte Systemauswahl: {selected}")
 
+    def _system_is_unstable(self, system, tolerance=1e-9):
+        try:
+            poles = np.asarray(ct.poles(system), dtype=complex).reshape(-1)
+        except Exception:
+            try:
+                poles = np.asarray(system.poles(), dtype=complex).reshape(-1)
+            except Exception:
+                return False
+        finite = np.isfinite(poles.real) & np.isfinite(poles.imag)
+        return bool(np.any(poles.real[finite] >= -tolerance))
+
+    @staticmethod
+    def _unstable_system_warning(label):
+        return (
+            f"{label}: Das verwendete Zeitbereichssystem ist instabil bzw. nicht asymptotisch stabil; "
+            "eine Ausregelzeit ist nicht definiert."
+        )
+
     def _disturbance_time_models(self, data):
         delay_tf = self._pade_delay_tf(data["delay"], data["pade_order"], label="Padé für Störung")
         plant_time = data["plant"] * delay_tf
@@ -3344,12 +3378,14 @@ class ControlExplorerApp(tk.Tk):
         self._last_warning_text = warning_text
         self._set_output_message(f"Hinweise / Warnungen:\n{warning_text}", level="warning")
 
-    def update_plots(self):
+    def update_plots(self, force_root_locus_prompt=False):
         if self._after_id is not None:
             self.after_cancel(self._after_id)
         self._after_id = None
 
         active_tab = self.notebook.index(self.notebook.select())
+        if active_tab == 2 and force_root_locus_prompt:
+            self._root_locus_prompt_declined_signature = None
         if active_tab == 2 and not self._ensure_root_locus_gain_available(prompt=True):
             self._clear_hover_annotations(redraw=True)
             self.ax_root_locus.clear()
@@ -4420,6 +4456,12 @@ class ControlExplorerApp(tk.Tk):
         ax_u.clear()
 
         models = self._disturbance_time_models(data)
+        disturbance_unstable = any(
+            self._system_is_unstable(models[key])
+            for key in ("y_from_w", "y_from_du", "y_from_dy")
+        )
+        if disturbance_unstable:
+            self._control_warnings.append(self._unstable_system_warning("Störaufschaltung"))
         t = data["t"]
         w_signal = np.full_like(t, data["step_amplitude"], dtype=float)
         d_signal = np.where(t >= data["disturbance_time"], data["disturbance_amplitude"], 0.0)
@@ -4492,7 +4534,9 @@ class ControlExplorerApp(tk.Tk):
         else:
             tail_still_changes = True
 
-        if abs(steady_error) <= tolerance:
+        if disturbance_unstable:
+            settling_text = "System instabil\nkeine Ausregelung"
+        elif abs(steady_error) <= tolerance:
             settling_time, settling_status = self._settling_time_after_step(
                 t,
                 y_total,
@@ -4535,10 +4579,14 @@ class ControlExplorerApp(tk.Tk):
                     "Keine vollständige Ausregelung\n"
                     f"Einschwingen auf neuen Endwert ({settling_reference_text}): {settling_to_new_value:.4g} s"
                 )
+        settling_annotation = settling_text
+        if not disturbance_unstable:
+            settling_annotation += f"\nbleibende Abweichung y: {steady_error:.4g} V"
+
         ax_y.text(
             0.02,
             0.04,
-            settling_text + f"\nbleibende Abweichung y: {steady_error:.4g} V",
+            settling_annotation,
             transform=ax_y.transAxes,
             fontsize=8.5,
             va="bottom",
@@ -4759,15 +4807,18 @@ class ControlExplorerApp(tk.Tk):
         try:
             tout, yout = self._call_control("step_response", ct.step_response, sys_time, T=t)
             y = step_amplitude * np.squeeze(yout)
-            expected_final = self._step_expected_final_value(sys_time, step_amplitude)
-            window_warning = self._time_window_warning(
-                "Sprungantwort",
-                tout,
-                y,
-                expected_final=expected_final,
-            )
-            if window_warning:
-                self._control_warnings.append(window_warning)
+            if self._system_is_unstable(sys_time):
+                self._control_warnings.append(self._unstable_system_warning("Sprungantwort"))
+            else:
+                expected_final = self._step_expected_final_value(sys_time, step_amplitude)
+                window_warning = self._time_window_warning(
+                    "Sprungantwort",
+                    tout,
+                    y,
+                    expected_final=expected_final,
+                )
+                if window_warning:
+                    self._control_warnings.append(window_warning)
 
             pre_duration = max(0.1 * float(tout[-1]), np.finfo(float).eps)
             pre_points = max(2, min(200, len(tout) // 10))
@@ -4939,18 +4990,25 @@ class ControlExplorerApp(tk.Tk):
                 T=data["t"],
             )
             y_step = data["step_amplitude"] * np.squeeze(yout)
-            expected_final = self._step_expected_final_value(sys_time, data["step_amplitude"])
-            window_warning = self._time_window_warning(
-                "Sprungantwort",
-                tout,
-                y_step,
-                expected_final=expected_final,
-            )
-            if window_warning:
-                self._control_warnings.append(window_warning)
-                text_lines.append("Warnung zur Zeitachse:")
-                text_lines.append(f"  {window_warning}")
+            if self._system_is_unstable(sys_time):
+                instability_warning = self._unstable_system_warning("Sprungantwort")
+                self._control_warnings.append(instability_warning)
+                text_lines.append("Stabilitätshinweis:")
+                text_lines.append(f"  {instability_warning}")
                 text_lines.append("")
+            else:
+                expected_final = self._step_expected_final_value(sys_time, data["step_amplitude"])
+                window_warning = self._time_window_warning(
+                    "Sprungantwort",
+                    tout,
+                    y_step,
+                    expected_final=expected_final,
+                )
+                if window_warning:
+                    self._control_warnings.append(window_warning)
+                    text_lines.append("Warnung zur Zeitachse:")
+                    text_lines.append(f"  {window_warning}")
+                    text_lines.append("")
 
             info = self._call_control("step_info", ct.step_info, scaled_sys_time, T=data["t"])
             text_lines.append("Step-Info:")
