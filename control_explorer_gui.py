@@ -32,6 +32,15 @@ except Exception:
     add_tooltip = None
 
 
+class ControlExplorerToolbar(NavigationToolbar2Tk):
+    def __init__(self, canvas, window, app, **kwargs):
+        self._control_explorer_app = app
+        super().__init__(canvas, window, **kwargs)
+
+    def home(self, *args):
+        self._control_explorer_app._on_toolbar_home(self)
+
+
 class ControlExplorerApp(tk.Tk):
     """
     Tkinter GUI for interactive analysis of SISO transfer functions with python-control.
@@ -621,12 +630,6 @@ class ControlExplorerApp(tk.Tk):
             foreground="#555555",
         ).grid(row=3, column=0, sticky="w", padx=6, pady=(2, 6))
 
-        marker_frame = ttk.Frame(parent)
-        marker_frame.grid(row=2, column=0, sticky="ew", padx=6, pady=3)
-        marker_frame.columnconfigure(1, weight=1)
-        ttk.Label(marker_frame, text="Marker-omega").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        ttk.Entry(marker_frame, textvariable=self.marker_omega_var).grid(row=0, column=1, sticky="ew")
-
     def _create_step_settings(self, parent):
         self._add_entry(parent, "t_max", self.t_max_var, 0, 0)
         self._add_entry(parent, "Punkte", self.t_points_var, 1, 0)
@@ -760,8 +763,19 @@ class ControlExplorerApp(tk.Tk):
         ttk.Checkbutton(parent, text="kritischen Punkt -1 zeigen", variable=self.show_critical_point_var, command=self.schedule_update).grid(row=3, column=0, sticky="w", pady=3)
         ttk.Checkbutton(parent, text="normierte Ortskurve ohne Zahlen/Raster", variable=self.normalized_nyquist_var, command=self.schedule_update).grid(row=4, column=0, sticky="w", pady=3)
 
+        marker_frame = ttk.LabelFrame(parent, text="Marker")
+        marker_frame.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        marker_frame.columnconfigure(1, weight=1)
+        ttk.Label(marker_frame, text="omega-Werte").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(marker_frame, textvariable=self.marker_omega_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
+        ttk.Label(
+            marker_frame,
+            text="Markiert Frequenzpunkte auf der Nyquist-Ortskurve, getrennt durch Kommas.",
+            foreground="#555555",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
+
         arrow_frame = ttk.LabelFrame(parent, text="Richtungspfeile")
-        arrow_frame.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        arrow_frame.grid(row=6, column=0, sticky="ew", pady=(12, 0))
         arrow_frame.columnconfigure(1, weight=1)
         ttk.Label(arrow_frame, text="omega-Werte").grid(row=0, column=0, sticky="w", padx=6, pady=4)
         ttk.Entry(arrow_frame, textvariable=self.direction_arrow_positions_var).grid(row=0, column=1, sticky="ew", padx=6, pady=4)
@@ -1238,7 +1252,6 @@ class ControlExplorerApp(tk.Tk):
         self.params_text.insert(
             "1.0",
             "K_R = 2.0\n"
-            "T_t = np.pi / 4\n"
         )
 
         ttk.Label(parent, text="Übertragungsfunktionen").grid(row=11, column=0, sticky="w")
@@ -1692,7 +1705,7 @@ class ControlExplorerApp(tk.Tk):
     def _embed_figure(self, parent, fig):
         canvas = FigureCanvasTkAgg(fig, master=parent)
 
-        toolbar = NavigationToolbar2Tk(canvas, parent, pack_toolbar=False)
+        toolbar = ControlExplorerToolbar(canvas, parent, self, pack_toolbar=False)
         toolbar.update()
 
         self._add_custom_toolbar_buttons(toolbar, fig)
@@ -1701,6 +1714,18 @@ class ControlExplorerApp(tk.Tk):
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         return canvas
+
+    def _on_toolbar_home(self, toolbar):
+        self._clear_toolbar_history(toolbar)
+        self.update_plots(force_root_locus_prompt=True)
+
+    @staticmethod
+    def _clear_toolbar_history(toolbar):
+        try:
+            toolbar._nav_stack.clear()
+            toolbar.set_history_buttons()
+        except Exception:
+            pass
     
     def _add_custom_toolbar_buttons(self, toolbar, fig):
         """
