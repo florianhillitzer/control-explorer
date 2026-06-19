@@ -34,6 +34,7 @@ MANIFEST
 !control_explorer.spec
 .venv-build/
 .venv-build-linux/
+.build_linux.sh.swp
 
 # Installer logs
 pip-log.txt

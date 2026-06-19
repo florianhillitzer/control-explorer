@@ -4,6 +4,10 @@ from PyInstaller.utils.hooks import collect_all
 
 
 control_datas, control_binaries, control_hiddenimports = collect_all("control")
+hiddenimports = control_hiddenimports + [
+    "PIL.ImageTk",
+    "PIL._tkinter_finder",
+]
 
 a = Analysis(
     ["control_explorer_gui.py"],
@@ -19,7 +23,7 @@ a = Analysis(
         ("docs", "docs"),
         ("toolbar_icons", "toolbar_icons"),
     ] + control_datas,
-    hiddenimports=control_hiddenimports,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
