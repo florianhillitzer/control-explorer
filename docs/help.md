@@ -12,6 +12,7 @@ Der offene Kreis für Nyquist, Bode und Wurzelortskurve ist `L(s)=K(s)G(s)`. Der
 - Die Variable `s` ist bereits als `ct.TransferFunction.s` vorbereitet.
 - Übertragungsfunktionen können direkt als Ausdrücke wie `K_R * (1 + 1/(T_I*s))` oder `1/(s**2 + 2*s + 1)` eingegeben werden.
 - Mathematische Funktionen aus `numpy` stehen über `np` zur Verfügung.
+- Häufige Konstanten können direkt verwendet werden, zum Beispiel `pi`, `Pi`, `PI`, `tau`, `e`, `E`, `inf` und `nan`.
 
 ## Aktualisieren und Beispiele
 
@@ -56,6 +57,8 @@ Der Hover zeigt Zeitwert, Ausgang und Eingangssignal am nächstliegenden Punkt.
 Die Störung kann als `d_u` additiv am Streckeneingang oder als `d_y` additiv am Streckenausgang wirken. Amplitude, Startzeit, optionale Endzeit, Toleranz, Störort und Komponentenanzeige liegen unter **Einstellungen > Störaufschaltung**.
 
 Eine leere Endzeit bedeutet, dass die Störung bis zum Simulationsende aktiv bleibt. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Störsignal und der resultierende Streckeneingang `u(t)`.
+
+Wenn das Simulationsfenster zu kurz ist, um eine dauerhafte Rückkehr in die Toleranz zu belegen, wird die Ausregelzeit als undefiniert markiert. In diesem Fall sollte `t_max` erhöht oder die Zeitauflösung vergrößert werden.
 
 ## Hilfe und Lizenz
 

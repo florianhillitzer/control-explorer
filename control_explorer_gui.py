@@ -732,7 +732,7 @@ class ControlExplorerApp(tk.Tk):
         ttk.Label(
             parent,
             text=(
-                "Gezeichnet werden die Pole von 1 + K L_0(s) = 0. "
+                "Gezeichnet werden die Pole von 1 + K_WOK L(s) = 0. "
                 "Bei Totzeit entstehen durch Padé zusätzliche approximierte Pole und Nullstellen."
             ),
             wraplength=460,
@@ -2734,7 +2734,19 @@ class ControlExplorerApp(tk.Tk):
             "zpk": ct.zpk,
             "ss": ct.ss,
             "pi": np.pi,
+            "Pi": np.pi,
+            "PI": np.pi,
+            "tau": 2.0 * np.pi,
+            "Tau": 2.0 * np.pi,
+            "TAU": 2.0 * np.pi,
             "e": np.e,
+            "E": np.e,
+            "inf": np.inf,
+            "Inf": np.inf,
+            "INF": np.inf,
+            "nan": np.nan,
+            "NaN": np.nan,
+            "NAN": np.nan,
             "sqrt": np.sqrt,
             "sin": np.sin,
             "cos": np.cos,
@@ -4255,7 +4267,7 @@ class ControlExplorerApp(tk.Tk):
         ax.axhline(0.0, color="#555555", linewidth=0.8)
         ax.set_xlabel(r"$\Re\{s\}$ [1/s]")
         ax.set_ylabel(r"$\Im\{s\}$ [1/s]")
-        ax.set_title(r"Wurzelortskurve für $1 + K L_0(s) = 0$")
+        ax.set_title(r"Wurzelortskurve für $1 + K_{\mathrm{WOK}} L(s) = 0$")
         ax.grid(self.grid_var.get(), which="both")
         x_span, y_span = self._set_root_locus_limits(ax, loci, open_poles, open_zeros)
         self._draw_root_locus_damping_grid(ax)
@@ -4327,19 +4339,23 @@ class ControlExplorerApp(tk.Tk):
         return np.asarray(response[1], dtype=float).reshape(-1)
 
     @staticmethod
-    def _settling_time_after_step(t, y, step_time, final_value, tolerance):
+    def _settling_time_after_step(t, y, step_time, final_value, tolerance, min_tail_points=3):
         t = np.asarray(t, dtype=float)
         y = np.asarray(y, dtype=float)
         mask = t >= step_time
         indices = np.where(mask)[0]
         if not indices.size:
-            return None
+            return None, "no_window"
 
         within = np.abs(y - final_value) <= tolerance
         for index in indices:
             if np.all(within[index:]):
-                return float(t[index] - step_time)
-        return None
+                if t.size - index < min_tail_points:
+                    return None, "window_too_short"
+                return float(t[index] - step_time), "settled"
+        if bool(within[-1]):
+            return None, "window_too_short"
+        return None, "not_settled"
 
     @staticmethod
     def _finite_real_scalar(value, tolerance=1e-8):
@@ -4467,28 +4483,52 @@ class ControlExplorerApp(tk.Tk):
             else data["disturbance_time"]
         )
         settling_reference_text = "nach Störende" if data["disturbance_end_time"] is not None else "nach Störbeginn"
+        window_too_short_text = "Ausregelzeit undefiniert"
+        post_reference_indices = np.flatnonzero(t >= settling_reference_time)
+        if post_reference_indices.size >= 3:
+            tail_length = max(3, int(np.ceil(0.05 * post_reference_indices.size)))
+            tail = y_total[post_reference_indices[-tail_length:]]
+            tail_still_changes = float(np.max(tail) - np.min(tail)) > tolerance
+        else:
+            tail_still_changes = True
 
         if abs(steady_error) <= tolerance:
-            settling_time = self._settling_time_after_step(
+            settling_time, settling_status = self._settling_time_after_step(
                 t,
                 y_total,
                 settling_reference_time,
                 baseline_value,
                 tolerance,
             )
-            if settling_time is None:
+            if settling_status == "window_too_short":
+                settling_text = window_too_short_text
+                self._control_warnings.append(
+                    "Störaufschaltung: Die Zeitachse ist zu kurz, um die Ausregelzeit eindeutig zu bestimmen. "
+                    "Erhöhe t_max oder die Anzahl der Zeitpunkte."
+                )
+            elif settling_time is None:
                 settling_text = "Ausregelzeit auf Arbeitspunkt: nicht im Simulationsfenster"
             else:
                 settling_text = f"Ausregelzeit auf Arbeitspunkt ({settling_reference_text}): {settling_time:.4g} s"
         else:
-            settling_to_new_value = self._settling_time_after_step(
-                t,
-                y_total,
-                settling_reference_time,
-                final_value,
-                tolerance,
-            )
-            if settling_to_new_value is None:
+            if tail_still_changes:
+                settling_to_new_value = None
+                settling_status = "window_too_short"
+            else:
+                settling_to_new_value, settling_status = self._settling_time_after_step(
+                    t,
+                    y_total,
+                    settling_reference_time,
+                    final_value,
+                    tolerance,
+                )
+            if settling_status == "window_too_short":
+                settling_text = window_too_short_text
+                self._control_warnings.append(
+                    "Störaufschaltung: Die Zeitachse ist zu kurz, um ein Einschwingen nach der Störung "
+                    "eindeutig zu bestimmen. Erhöhe t_max oder die Anzahl der Zeitpunkte."
+                )
+            elif settling_to_new_value is None:
                 settling_text = "Keine Ausregelzeit: Rückkehr zum Arbeitspunkt nicht erkennbar"
             else:
                 settling_text = (
