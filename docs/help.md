@@ -18,7 +18,7 @@ Der offene Kreis für Nyquist, Bode und Wurzelortskurve ist `L(s)=K(s)G(s)`. Der
 
 Mit **Aktualisieren** werden die Darstellungen für den aktiven Tab neu berechnet. Bei aktivem Auto-Update geschieht das nach Eingabeänderungen automatisch verzögert.
 
-Beispiele können gespeichert und geladen werden; der Standardordner ist `Control Explorer Examples` im Dokumente-Ordner. Ein Beispiel speichert das Modell und die dazugehörigen Analyseparameter, zum Beispiel Frequenzbereiche, Zeitbereich, Padé-Ordnung, Störsignal und gewählte Systempfade. Reine Anzeige- und Bedienvorlieben wie Grid, Auto-Update, Bode-Einheit oder Dämpfungslinien bleiben globale Programmeinstellungen.
+Beispiele können über **Datei > Beispiel laden...** und **Datei > Beispiel speichern...** geöffnet oder abgelegt werden; der Standardordner ist `Control Explorer Examples` im Dokumente-Ordner. Ein Beispiel speichert das Modell und die dazugehörigen Analyseparameter, zum Beispiel Frequenzbereiche, Zeitbereich, Padé-Ordnung, Störsignal und gewählte Systempfade. Reine Anzeige- und Bedienvorlieben wie Grid, Auto-Update, Bode-Einheit oder Dämpfungslinien bleiben globale Programmeinstellungen.
 
 ## Hover und Zoom
 

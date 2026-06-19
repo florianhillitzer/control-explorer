@@ -479,10 +479,13 @@ class ControlExplorerApp(tk.Tk):
     def _create_menu(self):
         menu_bar = tk.Menu(self)
 
-        settings_menu = tk.Menu(menu_bar, tearoff=False)
-        settings_menu.add_command(label="Einstellungen öffnen...", command=self._open_settings_window)
+        file_menu = tk.Menu(menu_bar, tearoff=False)
+        file_menu.add_command(label="Beispiel laden...", command=self.load_example)
+        file_menu.add_command(label="Beispiel speichern...", command=self.save_example)
+        file_menu.add_separator()
+        file_menu.add_command(label="Einstellungen...", command=self._open_settings_window)
 
-        menu_bar.add_cascade(label="Einstellungen", menu=settings_menu)
+        menu_bar.add_cascade(label="Datei", menu=file_menu)
         menu_bar.add_command(label="Hilfe", command=lambda: self._open_markdown_window("Hilfe", "docs/help.md", self._help_text()))
         menu_bar.add_command(
             label="Über / Lizenz",
@@ -1037,6 +1040,7 @@ class ControlExplorerApp(tk.Tk):
             "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner. "
             "Beispiele speichern Modell- und Analyseparameter; reine Anzeige- und Bedienvorlieben bleiben globale "
             "Programmeinstellungen.\n\n"
+            "Beispiele und Einstellungen befinden sich im Hauptmenü unter Datei.\n\n"
             "4. Nyquist / Ortskurve\n"
             "Der Tab zeigt wahlweise den offenen Kreis, die Führungsübertragung oder die Sensitivität. Für "
             "Stabilitätsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
@@ -1252,12 +1256,8 @@ class ControlExplorerApp(tk.Tk):
         button_frame = ttk.Frame(parent)
         button_frame.grid(row=14, column=0, sticky="ew", pady=(4, 8))
         button_frame.columnconfigure(0, weight=1)
-        button_frame.columnconfigure(1, weight=1)
 
-        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 4))
-        ttk.Button(button_frame, text="Einstellungen", command=self._open_settings_window).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=(0, 4))
-        ttk.Button(button_frame, text="Beispiel speichern", command=self.save_example).grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=(4, 0))
-        ttk.Button(button_frame, text="Beispiel laden", command=self.load_example).grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=(4, 0))
+        ttk.Button(button_frame, text="Aktualisieren", command=self.update_plots).grid(row=0, column=0, sticky="ew")
 
         help_text = (
             "Eingabehinweise:\n"
@@ -1345,7 +1345,7 @@ class ControlExplorerApp(tk.Tk):
         self.root_locus_gain_parameter_combo = None
         ttk.Label(
             root_locus_options,
-            text=f"WOK-Gain: {self.ROOT_LOCUS_GAIN_PARAMETER}",
+            text=f"WOK-Gain K={self.ROOT_LOCUS_GAIN_PARAMETER}",
         ).pack(side=tk.LEFT, padx=(0, 10))
         self.root_locus_marker_controls = ttk.Frame(root_locus_options)
         self.root_locus_marker_controls.pack(side=tk.LEFT)
