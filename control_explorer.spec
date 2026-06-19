@@ -17,6 +17,7 @@ a = Analysis(
         ("LICENSE", "."),
         ("NOTICE", "."),
         ("docs", "docs"),
+        ("toolbar_icons", "toolbar_icons"),
     ] + control_datas,
     hiddenimports=control_hiddenimports,
     hookspath=[],

@@ -6,7 +6,7 @@ Der linke Eingabebereich zeigt den Regelkreis als Blockdiagramm. Vorfilter und R
 
 Der Tab `Störaufschaltung` simuliert eine additive Störung wahlweise als `d_u` am Streckeneingang oder als `d_y` am Streckenausgang. Amplitude, Startzeit, Ausregel-Toleranz, Störort und Komponentenanzeige liegen unter `Einstellungen > Störung`. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Störsignal und der resultierende Streckeneingang `u(t)` inklusive einer einfachen Ausregelzeit-Schätzung nach dem Störsprung.
 
-Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K_WOK L_0(s) = 0` für einen einstellbaren Verstärkungsbereich, wobei `L_0(s)` der offene Kreis mit `K_WOK = 1` ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole für den ausgewählten Gain, Stabilitätsauswertung, Hover-Daten, Dämpfungslinien und eine optionale Padé-Approximation der Totzeit sind integriert. Fehlt `K_WOK`, fragt der Explorer, ob der Faktor ergänzt werden soll. Ein Klick auf die Wurzelortskurve übernimmt den gewählten Gain in `K_WOK`; beim Speichern eines Beispiels wird `K_WOK` wieder als `1` abgelegt.
+Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K_WOK L_0(s) = 0` für einen einstellbaren Verstärkungsbereich, wobei `L_0(s)` der offene Kreis mit `K_WOK = 1` ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole für den ausgewählten Gain, Stabilitätsauswertung, Hover-Daten, Dämpfungslinien und eine optionale Padé-Approximation der Totzeit sind integriert. Fehlt `K_WOK`, fragt der Explorer, ob der Faktor ergänzt werden soll. Der markierte Entwurfswert kann im WOK-Tab eingegeben und mit Enter übernommen oder durch Klick auf die WOK ausgewählt werden.
 
 ## Direkt aus Python starten
 
@@ -14,7 +14,21 @@ Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K_WOK L_0(s) = 0` für
 python control_explorer_gui.py
 ```
 
-Benötigte Laufzeitpakete stehen in `requirements-build.txt`. PyInstaller wird nur für das Erzeugen der eigenständigen Windows- oder Linux-Anwendung benötigt.
+Benötigte Laufzeitpakete stehen in `requirements-build.txt`. PyInstaller wird nur für das Erzeugen einer eigenständigen Windows- oder Linux-Anwendung benötigt.
+
+## Projektdateien
+
+Wichtige Dateien, die beim Paketieren mit ausgeliefert werden:
+
+- `control_explorer_gui.py`: Hauptprogramm
+- `control_explorer.spec`: gemeinsamer PyInstaller-Build für Windows und Linux
+- `control_explorer_icon.png` und `control_explorer.ico`: Programmicon
+- `mrm_logo.png`: Logo für Hilfe-/Lizenzfenster
+- `toolbar_icons/`: eigene Toolbar-Icons für Zoom-Schaltflächen
+- `docs/help.md` und `docs/legal.md`: Gebrauchsanweisung und Lizenz-/Hinweistext
+- `VERSION`, `LICENSE`, `NOTICE`: Versions- und Lizenzinformationen
+
+Die Datei `control_explorer.spec` ist der maßgebliche Build-Einstieg. Sie bündelt neben den Python-Paketen auch Bilder, Logos, Toolbar-Icons, Dokumentation und Lizenzdateien.
 
 ## Windows-Anwendung bauen
 
@@ -34,7 +48,7 @@ Das Skript:
 
 1. erstellt die isolierte Umgebung `.venv-build`,
 2. installiert die festgelegten Abhängigkeiten,
-3. baut die Anwendung mit PyInstaller,
+3. baut die Anwendung mit PyInstaller und `control_explorer.spec`,
 4. schreibt das Ergebnis nach `dist\ControlExplorer`.
 
 Die fertige Anwendung liegt unter:
@@ -43,7 +57,7 @@ Die fertige Anwendung liegt unter:
 dist\ControlExplorer\ControlExplorer.exe
 ```
 
-Zum Verteilen muss der **gesamte Ordner** `dist\ControlExplorer` als ZIP-Datei weitergegeben werden. Auf dem Zielrechner sind weder Python noch die Python-Pakete erforderlich.
+Zum Verteilen muss der gesamte Ordner `dist\ControlExplorer` als ZIP-Datei weitergegeben werden. Auf dem Zielrechner sind weder Python noch die Python-Pakete erforderlich.
 
 ## Linux-Anwendung bauen
 
@@ -60,32 +74,27 @@ sudo apt update
 sudo apt install python3-venv
 ```
 
-Im Projektverzeichnis eine isolierte Build-Umgebung erstellen und aktivieren:
+Im Projektverzeichnis ausführen:
+
+```bash
+chmod +x ./build_linux.sh
+./build_linux.sh
+```
+
+Das Skript:
+
+1. erstellt die isolierte Umgebung `.venv-build-linux`,
+2. installiert die festgelegten Abhängigkeiten,
+3. baut die Anwendung mit PyInstaller und `control_explorer.spec`,
+4. schreibt das Ergebnis nach `dist/ControlExplorer`.
+
+Alternativ kann derselbe Build ohne Skript manuell ausgeführt werden:
 
 ```bash
 python3 -m venv .venv-build-linux
-source .venv-build-linux/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements-build.txt
-```
-
-Danach den Linux-Build mit PyInstaller erzeugen:
-
-```bash
-rm -rf build dist ControlExplorer.spec
-
-python -m PyInstaller --noconfirm --clean --onedir \
-  --name ControlExplorer \
-  --add-data "control_explorer_icon.png:." \
-  --add-data "mrm_logo.png:." \
-  --add-data "VERSION:." \
-  --add-data "LICENSE:." \
-  --add-data "NOTICE:." \
-  --add-data "docs:docs" \
-  --collect-all control \
-  --hidden-import=PIL.ImageTk \
-  --hidden-import=PIL._tkinter_finder \
-  control_explorer_gui.py
+.venv-build-linux/bin/python -m pip install --upgrade pip
+.venv-build-linux/bin/python -m pip install -r requirements-build.txt
+.venv-build-linux/bin/python -m PyInstaller --noconfirm --clean control_explorer.spec
 ```
 
 Die fertige Linux-Anwendung liegt anschließend unter:
@@ -94,13 +103,13 @@ Die fertige Linux-Anwendung liegt anschließend unter:
 dist/ControlExplorer/ControlExplorer
 ```
 
-Gestartet wird sie aus dem Projektverzeichnis mit:
+Gestartet wird sie mit:
 
 ```bash
 ./dist/ControlExplorer/ControlExplorer
 ```
 
-Zum Verteilen muss der **gesamte Ordner** `dist/ControlExplorer` weitergegeben werden. Auf dem Zielsystem sind weder Python noch die Python-Pakete erforderlich, solange die Zielumgebung zur Build-Umgebung kompatibel ist.
+Zum Verteilen muss der gesamte Ordner `dist/ControlExplorer` weitergegeben werden. Auf dem Zielsystem sind weder Python noch die Python-Pakete erforderlich, solange die Zielumgebung zur Build-Umgebung kompatibel ist.
 
 ### Linux-App-Menüeintrag erzeugen
 
@@ -143,8 +152,8 @@ Die Anwendung verwendet große wissenschaftliche Bibliotheken wie NumPy, SciPy u
 
 ## Benutzerdaten
 
-- Einstellungen: `%APPDATA%\ControlExplorer\settings.json`
-- Gespeicherte Beispiele: `Dokumente\Control Explorer Examples`
+- Einstellungen: `%APPDATA%\ControlExplorer\settings.json` unter Windows, sonst `~/ControlExplorer/settings.json`
+- Gespeicherte Beispiele: `Dokumente\Control Explorer Examples` beziehungsweise `~/Documents/Control Explorer Examples`
 
 Diese Dateien liegen außerhalb des Programmordners und bleiben bei einem Programmupdate erhalten. Globale Anzeige- und Bedienvorlieben werden in `settings.json` gespeichert; Beispiele enthalten nur Modell- und Analyseparameter.
 
@@ -155,7 +164,8 @@ Vor einer Veröffentlichung:
 1. `dist\ControlExplorer\ControlExplorer.exe` auf einem Windows-Rechner ohne Python testen.
 2. `dist/ControlExplorer/ControlExplorer` auf einem Linux-Rechner ohne aktivierte Python-Umgebung testen.
 3. Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung, Hover sowie Beispiel-Speichern/Laden prüfen.
-4. Den vollständigen Ordner als ZIP-Datei veröffentlichen, beispielsweise über GitHub Releases.
-5. Für eine professionelle öffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
+4. Prüfen, dass `docs`, `toolbar_icons`, `control_explorer_icon.png`, `mrm_logo.png`, `VERSION`, `LICENSE` und `NOTICE` im Build-Ordner vorhanden sind.
+5. Den vollständigen Ordner als ZIP- oder Tar-Archiv veröffentlichen, beispielsweise über GitHub Releases.
+6. Für eine professionelle öffentliche Windows-Verteilung die EXE optional digital signieren. Ohne Signatur kann Windows SmartScreen bei unbekannten Downloads warnen.
 
 Windows-Builds müssen unter Windows erstellt werden. Linux-Builds müssen unter Linux erstellt werden. Für macOS wird ein eigener Build auf macOS benötigt.
