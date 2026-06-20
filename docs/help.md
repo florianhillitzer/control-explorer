@@ -20,6 +20,8 @@ Mit **Aktualisieren** werden die Darstellungen für den aktiven Tab neu berechne
 
 Beispiele können über **Datei > Beispiel laden...** und **Datei > Beispiel speichern...** geöffnet oder abgelegt werden; der Standardordner ist `Control Explorer Examples` im Dokumente-Ordner. Ein Beispiel speichert das Modell und die dazugehörigen Analyseparameter, zum Beispiel Frequenzbereiche, Zeitbereich, Padé-Ordnung, Störsignal und gewählte Systempfade. Reine Anzeige- und Bedienvorlieben wie Grid, Auto-Update, Bode-Einheit oder Dämpfungslinien bleiben globale Programmeinstellungen.
 
+Über **Datei > Als MATLAB-Skript exportieren...** kann das aktuelle Modell als `.m`-Datei exportiert werden. Das erzeugte Skript verwendet numerische `tf(...)`-Modelle und rekonstruiert Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und Störaufschaltung in MATLAB mit der Control System Toolbox.
+
 ## Hover und Zoom
 
 Alle Analyseplots besitzen Hover-Informationen zum nächstliegenden Kurvenpunkt. Die Werkzeugleiste stellt die üblichen Matplotlib-Funktionen sowie eigene Zoom-In- und Zoom-Out-Schaltflächen bereit. Während Pan, Zoom oder Scroll-Interaktion aktiv ist, werden Hover-Markierungen ausgeblendet und anschließend wieder neu berechnet.

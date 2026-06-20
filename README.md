@@ -8,6 +8,8 @@ Der Tab `Störaufschaltung` simuliert eine additive Störung wahlweise als `d_u`
 
 Die Wurzelortskurve zeigt die geschlossenen Pole von `1 + K_WOK L_0(s) = 0` für einen einstellbaren Verstärkungsbereich, wobei `L_0(s)` der offene Kreis mit `K_WOK = 1` ist. Richtungspfeile, offene Pole und Nullstellen, markierte geschlossene Pole für den ausgewählten Gain, Stabilitätsauswertung, Hover-Daten, Dämpfungslinien und eine optionale Padé-Approximation der Totzeit sind integriert. Fehlt `K_WOK`, fragt der Explorer, ob der Faktor ergänzt werden soll. Der markierte Entwurfswert kann im WOK-Tab eingegeben und mit Enter übernommen oder durch Klick auf die WOK ausgewählt werden.
 
+Aktuelle Modelle können über `Datei > Als MATLAB-Skript exportieren...` als lauffähiges `.m`-Skript mit Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und Störaufschaltung exportiert werden.
+
 ## Direkt aus Python starten
 
 ```powershell

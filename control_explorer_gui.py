@@ -491,6 +491,7 @@ class ControlExplorerApp(tk.Tk):
         file_menu = tk.Menu(menu_bar, tearoff=False)
         file_menu.add_command(label="Beispiel laden...", command=self.load_example)
         file_menu.add_command(label="Beispiel speichern...", command=self.save_example)
+        file_menu.add_command(label="Als MATLAB-Skript exportieren...", command=self.export_matlab_script)
         file_menu.add_separator()
         file_menu.add_command(label="Einstellungen...", command=self._open_settings_window)
 
@@ -1058,7 +1059,7 @@ class ControlExplorerApp(tk.Tk):
             "werden; der Standardordner ist 'Control Explorer Examples' im Dokumente-Ordner. "
             "Beispiele speichern Modell- und Analyseparameter; reine Anzeige- und Bedienvorlieben bleiben globale "
             "Programmeinstellungen.\n\n"
-            "Beispiele und Einstellungen befinden sich im Hauptmenü unter Datei.\n\n"
+            "Beispiele, MATLAB-Skript-Export und Einstellungen befinden sich im Hauptmenü unter Datei.\n\n"
             "4. Nyquist / Ortskurve\n"
             "Der Tab zeigt wahlweise den offenen Kreis, die Führungsübertragung oder die Sensitivität. Für "
             "Stabilitätsbetrachtungen ist meist der offene Kreis mit kritischem Punkt -1 relevant. Richtungspfeile "
@@ -5066,6 +5067,382 @@ class ControlExplorerApp(tk.Tk):
             f"{traceback.format_exc()}",
         )
         self.info_text.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _matlab_escape(text):
+        return str(text).replace("'", "''")
+
+    @staticmethod
+    def _matlab_bool(value):
+        return "true" if value else "false"
+
+    @staticmethod
+    def _matlab_number(value):
+        value = float(value)
+        if abs(value) < 5e-16:
+            value = 0.0
+        if np.isnan(value):
+            return "NaN"
+        if np.isposinf(value):
+            return "Inf"
+        if np.isneginf(value):
+            return "-Inf"
+        return f"{value:.16g}"
+
+    def _matlab_vector(self, values, values_per_line=8):
+        values = list(np.asarray(values, dtype=float).reshape(-1))
+        if not values:
+            return "[]"
+        formatted = [self._matlab_number(value) for value in values]
+        if len(formatted) <= values_per_line:
+            return "[" + " ".join(formatted) + "]"
+        lines = []
+        for start in range(0, len(formatted), values_per_line):
+            chunk = " ".join(formatted[start:start + values_per_line])
+            suffix = " ..." if start + values_per_line < len(formatted) else ""
+            lines.append(f"    {chunk}{suffix}")
+        return "[\n" + "\n".join(lines) + "\n]"
+
+    def _matlab_tf_assignment(self, name, system):
+        num, den = self._tf_num_den_arrays(system)
+        return f"{name} = tf({self._matlab_vector(num)}, {self._matlab_vector(den)});"
+
+    def _matlab_comment_block(self, title, text):
+        lines = [f"% {title}:"]
+        content = str(text).strip()
+        if not content:
+            lines.append("%   <leer>")
+            return lines
+        for line in content.splitlines():
+            lines.append(f"%   {line}")
+        return lines
+
+    def _matlab_parameter_assignments(self, data):
+        lines = []
+        try:
+            names = self._assigned_parameter_names(data["params_code"])
+        except (SyntaxError, ValueError):
+            names = []
+        for name in names:
+            value = data["env"].get(name)
+            if isinstance(value, (int, float, np.number)) and np.isreal(value):
+                lines.append(f"{name} = {self._matlab_number(value)};")
+        return lines
+
+    def _matlab_system_selection_assignment(self, target, open_loop_name, selected, prefilter_enabled):
+        selected = self._normalize_system_selection(selected)
+        lines = [f"% Auswahl: {selected}"]
+        if selected == self.SYSTEM_OPEN:
+            lines.append(f"{target} = {open_loop_name};")
+        elif selected == self.SYSTEM_CLOSED:
+            lines.append(f"{target} = feedback({open_loop_name}, 1);")
+            if prefilter_enabled:
+                lines.append(f"{target} = V * {target};")
+        elif selected == self.SYSTEM_SENS:
+            lines.append(f"{target} = feedback(1, {open_loop_name});")
+        else:
+            lines.append(f"{target} = {open_loop_name};")
+        return lines
+
+    def _matlab_script_text(self, data, step_system, root_locus_system, disturbance_models):
+        nyquist_selected = self._normalize_system_selection(self.nyquist_plot_system_var.get())
+        bode_selected = self._normalize_system_selection(self.bode_plot_system_var.get())
+        step_selected = self._normalize_system_selection(self.step_plot_system_var.get())
+        disturbance_is_output = data["disturbance_location"] == self.DISTURBANCE_OUTPUT
+        disturbance_key = "dy" if disturbance_is_output else "du"
+        disturbance_symbol = "d_y" if disturbance_is_output else "d_u"
+        frequency_unit = self.bode_frequency_unit_var.get()
+        bode_freq_units = "Hz" if frequency_unit == self.BODE_UNIT_HZ else "rad/s"
+        export_root_locus = root_locus_system is not None
+
+        lines = [
+            "% Control Explorer MATLAB export",
+            f"% Generated by Control Explorer {self.app_version}",
+            "% Requires MATLAB Control System Toolbox.",
+            "% Frequency-domain plots use freqresp/frd with the exact delay factor exp(-1i*omega*T_delay).",
+            "% Time-domain plots use the configured Pade approximation.",
+            "",
+        ]
+        lines += self._matlab_comment_block("Parametercode in der GUI", data["params_code"])
+        lines += self._matlab_comment_block("Strecke G(s) in der GUI", data["plant_expr"])
+        lines += self._matlab_comment_block("Regler K(s) in der GUI", data["controller_expr"])
+        lines += self._matlab_comment_block("Vorfilter V(s) in der GUI", data["prefilter_expr"])
+        lines += [
+            "",
+            "clear; close all; clc;",
+            "s = tf('s'); %#ok<NASGU>",
+            "",
+            "% Scalar parameters evaluated from the GUI parameter field",
+        ]
+        parameter_lines = self._matlab_parameter_assignments(data)
+        if parameter_lines:
+            lines += parameter_lines
+        else:
+            lines.append("% <keine skalaren Parameter>")
+        lines += [
+            "",
+            "% Transfer functions after evaluating the GUI input",
+            self._matlab_tf_assignment("G", data["plant"]),
+            self._matlab_tf_assignment("K", data["controller"]),
+            self._matlab_tf_assignment("V", data["prefilter"]),
+            self._matlab_tf_assignment("L", data["sys_rational"]),
+            "",
+            f"T_delay = {self._matlab_number(data['delay'])};",
+            f"pade_order = {int(data['pade_order'])};",
+            f"step_amplitude = {self._matlab_number(data['step_amplitude'])};",
+            "L_delay = L;",
+            "L_delay.InputDelay = T_delay;",
+            "",
+            "% Pade approximation for time-domain plots",
+            "if T_delay > 0 && pade_order > 0",
+            "    [num_delay, den_delay] = pade(T_delay, pade_order);",
+            "    D_pade = tf(num_delay, den_delay);",
+            "else",
+            "    D_pade = tf(1, 1);",
+            "end",
+            "L_time = K * G * D_pade;",
+        ]
+        lines += self._matlab_system_selection_assignment(
+            "T_step",
+            "L_time",
+            step_selected,
+            data["prefilter_enabled"],
+        )
+        lines += [
+            "",
+        ]
+        nyquist_point_count = max(5000, int(len(data["omega"]) * 5))
+        bode_point_count = max(4000, int(len(data["bode_omega"]) * 2))
+        lines += [
+            "% Nyquist / Ortskurve",
+            (
+                "omega_nyquist = linspace("
+                f"{self._matlab_number(data['omega'][0])}, "
+                f"{self._matlab_number(data['omega'][-1])}, "
+                f"{nyquist_point_count}).';"
+            ),
+            "L_nyquist = ce_freqresp_exact_delay(L, omega_nyquist, T_delay);",
+            (
+                "H_nyquist_response = ce_select_frequency_response("
+                f"L_nyquist, omega_nyquist, V, '{self._matlab_escape(nyquist_selected)}', "
+                f"{self._matlab_bool(data['prefilter_enabled'])});"
+            ),
+            "finite_nyquist = isfinite(real(H_nyquist_response)) & isfinite(imag(H_nyquist_response));",
+            "omega_nyquist = omega_nyquist(finite_nyquist);",
+            "H_nyquist_response = H_nyquist_response(finite_nyquist);",
+            "H_nyquist = frd(reshape(H_nyquist_response, 1, 1, []), omega_nyquist);",
+            f"marker_omega = {self._matlab_vector(data['markers'])};",
+            "nyquist_opts = nyquistoptions;",
+            f"nyquist_opts.Grid = '{'on' if self.grid_var.get() else 'off'}';",
+            "figure('Name', 'Nyquist-Ortskurve');",
+            "nyquistplot(H_nyquist, nyquist_opts);",
+            "hold on;",
+            "for k = 1:numel(marker_omega)",
+            "    L_marker = ce_freqresp_exact_delay(L, marker_omega(k), T_delay);",
+            (
+                "    H_marker = ce_select_frequency_response("
+                f"L_marker, marker_omega(k), V, '{self._matlab_escape(nyquist_selected)}', "
+                f"{self._matlab_bool(data['prefilter_enabled'])});"
+            ),
+            "    plot(real(H_marker), imag(H_marker), 's', 'MarkerSize', 7, 'LineWidth', 1.2);",
+            "    text(real(H_marker), imag(H_marker), sprintf('  \\\\omega=%.4g', marker_omega(k)));",
+            "end",
+            f"if {self._matlab_bool(self.show_critical_point_var.get() and self._is_open_loop_selection(nyquist_selected))}",
+            "    plot(-1, 0, 'rx', 'MarkerSize', 10, 'LineWidth', 1.4);",
+            "end",
+            f"if {self._matlab_bool(self.equal_axis_var.get())}, axis equal; end",
+            f"title('Nyquist-Ortskurve - {self._matlab_escape(nyquist_selected)}');",
+            "",
+        ]
+        lines += [
+            "% Bode / Frequenzgang",
+            (
+                "omega_bode = logspace(log10("
+                f"{self._matlab_number(data['bode_x_min'])}), log10("
+                f"{self._matlab_number(data['bode_x_max'])}), "
+                f"{bode_point_count}).';"
+            ),
+            "L_bode = ce_freqresp_exact_delay(L, omega_bode, T_delay);",
+            (
+                "H_bode_response = ce_select_frequency_response("
+                f"L_bode, omega_bode, V, '{self._matlab_escape(bode_selected)}', "
+                f"{self._matlab_bool(data['prefilter_enabled'])});"
+            ),
+            "finite_bode = isfinite(real(H_bode_response)) & isfinite(imag(H_bode_response));",
+            "omega_bode = omega_bode(finite_bode);",
+            "H_bode_response = H_bode_response(finite_bode);",
+            "H_bode = frd(reshape(H_bode_response, 1, 1, []), omega_bode);",
+            "bode_opts = bodeoptions;",
+            f"bode_opts.Grid = '{'on' if self.grid_var.get() else 'off'}';",
+            f"bode_opts.FreqUnits = '{bode_freq_units}';",
+            "figure('Name', 'Bode');",
+            "bodeplot(H_bode, bode_opts);",
+            f"title('Frequenzgang / Bode - {self._matlab_escape(bode_selected)}');",
+        ]
+        if self.show_bode_margins_var.get() and self._is_open_loop_selection(bode_selected):
+            lines += [
+                "",
+                "% MATLAB-native margin plot for the delayed open loop.",
+                "figure('Name', 'Stabilitaetsreserven');",
+                "margin(L_delay); grid on;",
+            ]
+        lines += [
+            "",
+            "% Wurzelortskurve",
+        ]
+        if export_root_locus:
+            lines += [
+                self._matlab_tf_assignment("L_wok", data["root_locus_sys_rational"]),
+                "L_wok_plot = L_wok;",
+                f"if {self._matlab_bool(self.root_locus_include_delay_var.get())} && T_delay > 0 && pade_order > 0",
+                "    L_wok_plot = L_wok_plot * D_pade;",
+                "end",
+                f"root_locus_marker_gain = {self._matlab_number(data['root_locus_marker_gain'])};",
+                "figure('Name', 'Wurzelortskurve');",
+                "rlocus(L_wok_plot); hold on; grid on;",
+                "marker_poles = pole(feedback(root_locus_marker_gain * L_wok_plot, 1));",
+                "plot(real(marker_poles), imag(marker_poles), 'o', 'MarkerSize', 8, 'LineWidth', 1.4);",
+                "xline(0, '--k'); yline(0, '-k');",
+                "title('Wurzelortskurve fuer 1 + K_{WOK} L(s) = 0');",
+                "xlabel('Re\\{s\\} [1/s]'); ylabel('Im\\{s\\} [1/s]');",
+                f"if {self._matlab_bool(self.root_locus_equal_axis_var.get())}, axis equal; end",
+            ]
+        else:
+            lines += [
+                "% Keine Wurzelortskurve exportiert, weil im Modell kein K_WOK erkannt wurde.",
+                "% Fuege K_WOK als multiplikativen Faktor ein und exportiere erneut.",
+            ]
+        lines += [
+            "",
+            "% Sprungantwort",
+            (
+                "t = linspace(0, "
+                f"{self._matlab_number(data['t'][-1])}, {len(data['t'])}).';"
+            ),
+            "figure('Name', 'Sprungantwort');",
+            "stepplot(step_amplitude * T_step, t); grid on;",
+            f"title('Sprungantwort - {self._matlab_escape(step_selected)}');",
+            "",
+            "% Stoeraufschaltung",
+        ]
+        for name, system in disturbance_models.items():
+            lines.append(self._matlab_tf_assignment(f"T_{name}", system))
+        lines += [
+            f"disturbance_amplitude = {self._matlab_number(data['disturbance_amplitude'])};",
+            f"disturbance_time = {self._matlab_number(data['disturbance_time'])};",
+            f"disturbance_end_time = {self._matlab_number(data['disturbance_end_time']) if data['disturbance_end_time'] is not None else 'NaN'};",
+            "w_signal = step_amplitude * ones(size(t));",
+            "d_signal = disturbance_amplitude * double(t >= disturbance_time);",
+            "if isfinite(disturbance_end_time)",
+            "    d_signal(t >= disturbance_end_time) = 0;",
+            "end",
+            "y_w = lsim(T_y_from_w, w_signal, t);",
+            f"y_d = lsim(T_y_from_{disturbance_key}, d_signal, t);",
+            "y_total = y_w + y_d;",
+            "ur_w = lsim(T_ur_from_w, w_signal, t);",
+            f"ur_d = lsim(T_ur_from_{disturbance_key}, d_signal, t);",
+            "ur_total = ur_w + ur_d;",
+            f"u_disturbance = lsim(T_u_from_{disturbance_key}, d_signal, t);",
+            "u_total = ur_w + u_disturbance;",
+            "figure('Name', 'Stoeraufschaltung');",
+            "subplot(2, 1, 1);",
+            "plot(t, y_total, 'LineWidth', 1.8, 'DisplayName', 'y(t)'); hold on;",
+        ]
+        if data["disturbance_show_reference_component"]:
+            lines.append("plot(t, y_w, '--', 'LineWidth', 1.1, 'DisplayName', 'y_w(t)');")
+        if data["disturbance_show_disturbance_component"]:
+            lines.append("plot(t, y_d, ':', 'LineWidth', 1.2, 'DisplayName', 'y_d(t)');")
+        lines += [
+            "xline(disturbance_time, ':k');",
+            "if isfinite(disturbance_end_time), xline(disturbance_end_time, '--', 'Color', [0.4 0.4 0.4]); end",
+            "grid on; ylabel('y(t) [V]');",
+            f"title('Stoeraufschaltung {self._matlab_escape(disturbance_symbol)}');",
+            "legend('show', 'Location', 'best');",
+            "subplot(2, 1, 2);",
+            "plot(t, ur_total, 'LineWidth', 1.6, 'DisplayName', 'u_R(t)'); hold on;",
+            "plot(t, d_signal, ':', 'LineWidth', 1.2, 'DisplayName', 'd(t)');",
+            "plot(t, u_total, '--', 'LineWidth', 1.6, 'DisplayName', 'u(t)');",
+            "xline(disturbance_time, ':k');",
+            "if isfinite(disturbance_end_time), xline(disturbance_end_time, '--', 'Color', [0.4 0.4 0.4]); end",
+            "grid on; xlabel('t [s]'); ylabel('[V]');",
+            "legend('show', 'Location', 'best');",
+            "",
+            "function response = ce_freqresp_exact_delay(sys, omega, delay_time)",
+            "    response = squeeze(freqresp(sys, omega));",
+            "    response = response(:) .* exp(-1i * omega(:) * delay_time);",
+            "end",
+            "",
+            "function response = ce_select_frequency_response(open_loop_response, omega, prefilter, selected, prefilter_enabled)",
+            "    response = open_loop_response(:);",
+            "    if strcmp(selected, 'Führungsübertragung Y(s)/W(s)')",
+            "        response = response ./ (1 + response);",
+            "        if prefilter_enabled",
+            "            prefilter_response = squeeze(freqresp(prefilter, omega));",
+            "            response = prefilter_response(:) .* response;",
+            "        end",
+            "    elseif strcmp(selected, 'Sensitivität S(s)')",
+            "        response = 1 ./ (1 + response);",
+            "    end",
+            "end",
+            "",
+        ]
+        return "\n".join(lines)
+
+    def export_matlab_script(self):
+        try:
+            root_locus_ready = self._ensure_root_locus_gain_available(prompt=True)
+            data = self._parse_user_input()
+            step_system = self._time_domain_system_with_pade(data, self.step_plot_system_var.get())
+            root_locus_system = None
+            if root_locus_ready and data["root_locus_gain_parameter"]:
+                root_locus_system = self._root_locus_system(
+                    data["root_locus_sys_rational"],
+                    data["delay"],
+                    data["pade_order"],
+                )
+            disturbance_models = self._disturbance_time_models(data)
+            script_text = self._matlab_script_text(
+                data,
+                step_system,
+                root_locus_system,
+                disturbance_models,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "MATLAB-Skript exportieren",
+                f"Das MATLAB-Skript konnte nicht erzeugt werden:\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        if not self._prepare_examples_directory():
+            return
+
+        initial_name = "control_explorer_export.m"
+        if self.current_example_path is not None:
+            initial_name = f"{self.current_example_path.stem}.m"
+
+        filename = filedialog.asksaveasfilename(
+            parent=self,
+            title="Als MATLAB-Skript exportieren",
+            initialdir=str(self.examples_dir),
+            initialfile=initial_name,
+            defaultextension=".m",
+            filetypes=[("MATLAB-Skript", "*.m"), ("Alle Dateien", "*.*")],
+        )
+        if not filename:
+            return
+
+        try:
+            with Path(filename).open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(script_text)
+            self.status_var.set(f"MATLAB-Skript exportiert: {Path(filename).name}")
+        except Exception as exc:
+            messagebox.showerror(
+                "MATLAB-Skript exportieren",
+                f"Das MATLAB-Skript konnte nicht gespeichert werden:\n\n{exc}",
+                parent=self,
+            )
 
     def _example_snapshot(self):
         plant_expr = self.plant_text.get("1.0", tk.END).strip()
