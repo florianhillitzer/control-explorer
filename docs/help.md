@@ -44,9 +44,9 @@ Die WOK basiert auf dem offenen Kreis ohne Vorfilter und verwendet den separaten
 
 Falls `K_WOK` im Modell fehlt, fragt der Explorer, ob `K_WOK = 1` zum Parametercode ergänzt und als Faktor vor den Regler gesetzt werden soll. Der markierte Entwurfswert wird oben im WOK-Tab angezeigt. Er kann direkt eingegeben und mit Enter übernommen werden. Alternativ kann eine Stelle auf der WOK angeklickt werden; der passende Gain wird dann übernommen.
 
-Unter **Einstellungen > Wurzelortskurve** werden Verstärkungsbereich, Anzahl der Punkte, logarithmische Abtastung, gleiche Achsenskalierung, Dämpfungslinien und die optionale Padé-Berücksichtigung der Totzeit eingestellt.
+Unter **Einstellungen > Wurzelortskurve** werden Verstärkungsbereich, Anzahl der Punkte, logarithmische Abtastung, gleiche Achsenskalierung, Dämpfungslinien, Konstruktionshilfen und die optionale Padé-Berücksichtigung der Totzeit eingestellt.
 
-Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Offene Pole und Nullstellen, Richtungspfeile, der markierte Entwurfswert, Stabilitätshinweise und Hover-Daten sind direkt im Plot verfügbar.
+Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Offene Pole und Nullstellen, Richtungspfeile, der markierte Entwurfswert, Stabilitätshinweise und Hover-Daten sind direkt im Plot verfügbar. Bei aktivierten Konstruktionshilfen werden Asymptoten, Wurzelschwerpunkt sowie Ein- und Austrittswinkel komplexer Nullstellen und Pole eingeblendet.
 
 ## Sprungantwort
 

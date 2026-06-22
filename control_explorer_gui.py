@@ -86,6 +86,7 @@ class ControlExplorerApp(tk.Tk):
         "root_locus_include_delay": False,
         "root_locus_equal_axis": False,
         "root_locus_show_damping": False,
+        "root_locus_show_construction": False,
         "root_locus_damping_ratios": "0.2, 0.4, 0.6, 0.8",
         "t_max": "20",
         "t_points": "2000",
@@ -119,6 +120,7 @@ class ControlExplorerApp(tk.Tk):
             "root_locus_log_gain",
             "root_locus_equal_axis",
             "root_locus_show_damping",
+            "root_locus_show_construction",
             "root_locus_damping_ratios",
             "disturbance_show_reference_component",
             "disturbance_show_disturbance_component",
@@ -312,6 +314,7 @@ class ControlExplorerApp(tk.Tk):
         self.root_locus_include_delay_var = tk.BooleanVar(value=defaults["root_locus_include_delay"])
         self.root_locus_equal_axis_var = tk.BooleanVar(value=defaults["root_locus_equal_axis"])
         self.root_locus_show_damping_var = tk.BooleanVar(value=defaults["root_locus_show_damping"])
+        self.root_locus_show_construction_var = tk.BooleanVar(value=defaults["root_locus_show_construction"])
         self.root_locus_damping_ratios_var = tk.StringVar(value=defaults["root_locus_damping_ratios"])
 
         self.t_max_var = tk.StringVar(value=defaults["t_max"])
@@ -363,6 +366,7 @@ class ControlExplorerApp(tk.Tk):
             "root_locus_include_delay": self.root_locus_include_delay_var,
             "root_locus_equal_axis": self.root_locus_equal_axis_var,
             "root_locus_show_damping": self.root_locus_show_damping_var,
+            "root_locus_show_construction": self.root_locus_show_construction_var,
             "root_locus_damping_ratios": self.root_locus_damping_ratios_var,
             "t_max": self.t_max_var,
             "t_points": self.t_points_var,
@@ -733,11 +737,17 @@ class ControlExplorerApp(tk.Tk):
             variable=self.root_locus_show_damping_var,
             command=self.schedule_update,
         ).grid(row=2, column=0, sticky="w", padx=6, pady=3)
+        ttk.Checkbutton(
+            display_box,
+            text="Konstruktionshilfen anzeigen",
+            variable=self.root_locus_show_construction_var,
+            command=self.schedule_update,
+        ).grid(row=3, column=0, sticky="w", padx=6, pady=3)
         self._add_entry(
             display_box,
             "Dämpfungsgrade zeta",
             self.root_locus_damping_ratios_var,
-            3,
+            4,
             0,
         )
         ttk.Label(
@@ -1073,7 +1083,8 @@ class ControlExplorerApp(tk.Tk):
             "Falls K_WOK im Modell fehlt, kann er per Dialog ergänzt werden. Ein Klick auf die Kurve übernimmt "
             "den passenden Wert in K_WOK; gespeicherte Beispiele werden wieder mit K_WOK = 1 abgelegt. "
             "Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Totzeit kann optional über Padé "
-            "approximiert werden.\n\n"
+            "approximiert werden. Konstruktionshilfen blenden Asymptoten, Wurzelschwerpunkt sowie Ein- und "
+            "Austrittswinkel ein.\n\n"
             "7. Sprungantwort\n"
             "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Padé-Ordnung aus Einstellungen > Sprung. "
             "Bei aktivem Vorfilter wird für die Führungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
@@ -1386,11 +1397,17 @@ class ControlExplorerApp(tk.Tk):
             "<Return>",
             self._commit_root_locus_marker_entry,
         )
+        ttk.Checkbutton(
+            root_locus_options,
+            text="Konstruktionshilfen",
+            variable=self.root_locus_show_construction_var,
+            command=self.schedule_update,
+        ).pack(side=tk.LEFT, padx=(10, 0))
         ttk.Label(
             root_locus_options,
             text="WOK-Linie anklicken oder Wert eingeben und Enter drücken",
             foreground="#555555",
-        ).pack(side=tk.LEFT, padx=(10, 0))
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
         self._create_tab_plot_system_selector(
             self.tab_step,
@@ -4112,6 +4129,212 @@ class ControlExplorerApp(tk.Tk):
         ax.set_ylim(ylim)
 
     @staticmethod
+    def _wrap_angle_degrees(angle):
+        wrapped = (float(angle) + 180.0) % 360.0 - 180.0
+        if np.isclose(wrapped, -180.0):
+            return 180.0
+        if np.isclose(wrapped, 0.0):
+            return 0.0
+        return wrapped
+
+    @classmethod
+    def _root_locus_departure_angle(cls, pole, poles, zeros, tolerance=1e-8):
+        skipped_matching_pole = False
+        zero_angles = [
+            np.degrees(np.angle(pole - zero))
+            for zero in zeros
+            if abs(pole - zero) > tolerance
+        ]
+        other_pole_angles = []
+        for other_pole in poles:
+            if not skipped_matching_pole and abs(pole - other_pole) <= tolerance:
+                skipped_matching_pole = True
+                continue
+            if abs(pole - other_pole) > tolerance:
+                other_pole_angles.append(np.degrees(np.angle(pole - other_pole)))
+        return cls._wrap_angle_degrees(180.0 + sum(zero_angles) - sum(other_pole_angles))
+
+    @classmethod
+    def _root_locus_arrival_angle(cls, zero, poles, zeros, tolerance=1e-8):
+        skipped_matching_zero = False
+        pole_angles = [
+            np.degrees(np.angle(zero - pole))
+            for pole in poles
+            if abs(zero - pole) > tolerance
+        ]
+        other_zero_angles = []
+        for other_zero in zeros:
+            if not skipped_matching_zero and abs(zero - other_zero) <= tolerance:
+                skipped_matching_zero = True
+                continue
+            if abs(zero - other_zero) > tolerance:
+                other_zero_angles.append(np.degrees(np.angle(zero - other_zero)))
+        return cls._wrap_angle_degrees(180.0 - sum(other_zero_angles) + sum(pole_angles))
+
+    def _draw_root_locus_angle_marker(
+        self,
+        ax,
+        point,
+        angle_degrees,
+        label_text,
+        color,
+        arrow_length,
+        points_toward_marker=False,
+        legend_label=None,
+    ):
+        angle = np.radians(angle_degrees)
+        direction = arrow_length * complex(np.cos(angle), np.sin(angle))
+        start = point - direction if points_toward_marker else point
+        end = point if points_toward_marker else point + direction
+        ax.annotate(
+            "",
+            xy=(end.real, end.imag),
+            xytext=(start.real, start.imag),
+            arrowprops={
+                "arrowstyle": "-|>",
+                "color": color,
+                "linewidth": 1.1,
+                "mutation_scale": 10,
+                "shrinkA": 0,
+                "shrinkB": 0,
+            },
+            zorder=5,
+        )
+        if legend_label:
+            ax.plot([], [], color=color, linewidth=1.1, label=legend_label)
+
+        label_position = point - 0.58 * direction if points_toward_marker else point + 0.58 * direction
+        ax.text(
+            label_position.real,
+            label_position.imag,
+            label_text,
+            color=color,
+            fontsize=7.5,
+            ha="center",
+            va="center",
+            bbox={"boxstyle": "round,pad=0.18", "fc": "white", "ec": color, "alpha": 0.82},
+            clip_on=True,
+            zorder=6,
+        )
+
+    def _draw_root_locus_construction_guides(self, ax, open_poles, open_zeros):
+        if not self.root_locus_show_construction_var.get():
+            return
+
+        poles = np.asarray(open_poles, dtype=complex).reshape(-1)
+        zeros = np.asarray(open_zeros, dtype=complex).reshape(-1)
+        poles = poles[np.isfinite(poles.real) & np.isfinite(poles.imag)]
+        zeros = zeros[np.isfinite(zeros.real) & np.isfinite(zeros.imag)]
+        if not poles.size:
+            return
+
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        x_span = max(xlim[1] - xlim[0], np.finfo(float).eps)
+        y_span = max(ylim[1] - ylim[0], np.finfo(float).eps)
+        reference_span = max(x_span, y_span, 1.0)
+        asymptote_length = 1.8 * reference_span
+        angle_arrow_length = 0.12 * reference_span
+
+        n_poles = poles.size
+        n_zeros = zeros.size
+        asymptote_count = n_poles - n_zeros
+        construction_color = "#6f6f6f"
+        departure_color = "#8a4fb5"
+        arrival_color = "#008c8c"
+
+        if asymptote_count > 0:
+            centroid = (np.sum(poles) - np.sum(zeros)) / asymptote_count
+            centroid = complex(float(np.real(centroid)), float(np.imag(centroid)))
+            if np.isfinite(centroid.real) and np.isfinite(centroid.imag):
+                ax.plot(
+                    centroid.real,
+                    centroid.imag,
+                    marker="P",
+                    markersize=7,
+                    color=construction_color,
+                    linestyle="none",
+                    label="Wurzelschwerpunkt",
+                    zorder=5,
+                )
+                ax.text(
+                    centroid.real,
+                    centroid.imag,
+                    rf"  $\sigma_A={centroid.real:.4g}$",
+                    color=construction_color,
+                    fontsize=8,
+                    ha="left",
+                    va="bottom",
+                    clip_on=True,
+                    zorder=6,
+                )
+
+                for index in range(asymptote_count):
+                    angle = (2 * index + 1) * np.pi / asymptote_count
+                    endpoint = centroid + asymptote_length * complex(np.cos(angle), np.sin(angle))
+                    ax.plot(
+                        [centroid.real, endpoint.real],
+                        [centroid.imag, endpoint.imag],
+                        linestyle="--",
+                        linewidth=1.0,
+                        color=construction_color,
+                        alpha=0.75,
+                        label="Asymptoten" if index == 0 else None,
+                        zorder=1,
+                    )
+                    label_point = centroid + 0.38 * asymptote_length * complex(np.cos(angle), np.sin(angle))
+                    if xlim[0] <= label_point.real <= xlim[1] and ylim[0] <= label_point.imag <= ylim[1]:
+                        angle_label = self._wrap_angle_degrees(np.degrees(angle))
+                        ax.text(
+                            label_point.real,
+                            label_point.imag,
+                            rf"$\alpha={angle_label:.0f}^\circ$",
+                            color=construction_color,
+                            fontsize=7.5,
+                            ha="center",
+                            va="center",
+                            clip_on=True,
+                            zorder=2,
+                        )
+
+        departure_label_used = False
+        for pole, multiplicity in self._group_pole_multiplicities(poles):
+            if multiplicity > 1 or abs(pole.imag) <= 1e-7:
+                continue
+            angle = self._root_locus_departure_angle(pole, poles, zeros)
+            self._draw_root_locus_angle_marker(
+                ax,
+                pole,
+                angle,
+                rf"Austritt {angle:.0f}$^\circ$",
+                departure_color,
+                angle_arrow_length,
+                points_toward_marker=False,
+                legend_label="Austrittswinkel" if not departure_label_used else None,
+            )
+            departure_label_used = True
+
+        arrival_label_used = False
+        for zero, multiplicity in self._group_pole_multiplicities(zeros):
+            if multiplicity > 1 or abs(zero.imag) <= 1e-7:
+                continue
+            angle = self._root_locus_arrival_angle(zero, poles, zeros)
+            self._draw_root_locus_angle_marker(
+                ax,
+                zero,
+                angle,
+                rf"Eintritt {angle:.0f}$^\circ$",
+                arrival_color,
+                angle_arrow_length,
+                points_toward_marker=True,
+                legend_label="Eintrittswinkel" if not arrival_label_used else None,
+            )
+            arrival_label_used = True
+
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+
+    @staticmethod
     def _set_root_locus_limits(ax, loci, open_poles, open_zeros):
         values = [np.asarray(loci, dtype=complex).reshape(-1)]
         if open_poles.size:
@@ -4356,6 +4579,7 @@ class ControlExplorerApp(tk.Tk):
         ax.grid(self.grid_var.get(), which="both")
         x_span, y_span = self._set_root_locus_limits(ax, loci, open_poles, open_zeros)
         self._draw_root_locus_damping_grid(ax)
+        self._draw_root_locus_construction_guides(ax, open_poles, open_zeros)
 
         span_ratio = max(x_span, y_span) / max(min(x_span, y_span), np.finfo(float).eps)
         use_equal_axis = self.root_locus_equal_axis_var.get() and span_ratio <= 8.0
