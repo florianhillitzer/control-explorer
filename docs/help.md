@@ -56,7 +56,7 @@ Der Hover zeigt Zeitwert, Ausgang und Eingangssignal am nächstliegenden Punkt.
 
 ## Störaufschaltung
 
-Die Störung kann als `d_u` additiv am Streckeneingang oder als `d_y` additiv am Streckenausgang wirken. Amplitude, Startzeit, optionale Endzeit, Toleranz, Störort und Komponentenanzeige liegen unter **Einstellungen > Störaufschaltung**.
+Die Störung kann als `d_u` additiv am Streckeneingang oder als `d_y` additiv am Streckenausgang wirken. Der Störort kann direkt im Tab oder unter **Einstellungen > Störaufschaltung** gewählt werden. Amplitude, Startzeit, optionale Endzeit, Toleranz und Komponentenanzeige liegen ebenfalls unter **Einstellungen > Störaufschaltung**.
 
 Eine leere Endzeit bedeutet, dass die Störung bis zum Simulationsende aktiv bleibt. Angezeigt werden Ausgang `y(t)`, Reglerausgang `u_R(t)`, Störsignal und der resultierende Streckeneingang `u(t)`.
 

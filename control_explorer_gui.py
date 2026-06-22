@@ -1079,8 +1079,9 @@ class ControlExplorerApp(tk.Tk):
             "Bei aktivem Vorfilter wird für die Führungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
             "8. Störaufschaltung\n"
             "Die Störung kann als d_u additiv am Streckeneingang oder als d_y additiv am Streckenausgang wirken. "
+            "Der Störort ist direkt im Tab und unter Einstellungen > Störaufschaltung wählbar. "
             "Amplitude, Startzeit, optionale Endzeit, Toleranz "
-            "und Komponentenanzeige liegen unter Einstellungen > Störung. Eine leere Endzeit bedeutet, dass die "
+            "und Komponentenanzeige liegen unter Einstellungen > Störaufschaltung. Eine leere Endzeit bedeutet, dass die "
             "Störung bis zum Simulationsende aktiv bleibt.\n\n"
             "9. Grenzen und Didaktik\n"
             "Der Explorer soll Rechnen und Visualisieren beschleunigen, ersetzt aber nicht das Verständnis. "
@@ -1399,17 +1400,28 @@ class ControlExplorerApp(tk.Tk):
 
         disturbance_options = ttk.Frame(self.tab_disturbance, padding=(0, 0, 0, 4))
         disturbance_options.pack(side=tk.TOP, fill=tk.X)
-        self.disturbance_summary_label = ttk.Label(
+        ttk.Label(disturbance_options, text="Störort:").pack(side=tk.LEFT, padx=(0, 6))
+        self.disturbance_location_combo = ttk.Combobox(
             disturbance_options,
-            text="Störung d_u oder d_y; Parameter unter Einstellungen > Störung.",
-            foreground="#555555",
+            textvariable=self.disturbance_location_var,
+            values=[self.DISTURBANCE_INPUT, self.DISTURBANCE_OUTPUT],
+            state="readonly",
+            width=28,
+            takefocus=False,
         )
-        self.disturbance_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.disturbance_location_combo.pack(side=tk.LEFT)
+        self.disturbance_location_combo.bind("<<ComboboxSelected>>", lambda _event: self.schedule_update())
         ttk.Button(
             disturbance_options,
             text="Störung einstellen...",
             command=lambda: self._open_settings_window(initial_tab="Störaufschaltung"),
         ).pack(side=tk.RIGHT)
+        self.disturbance_summary_label = ttk.Label(
+            disturbance_options,
+            text="Amplitude, Zeiten und Komponenten unter Einstellungen > Störaufschaltung.",
+            foreground="#555555",
+        )
+        self.disturbance_summary_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(12, 0))
 
         self.fig_nyquist = Figure(figsize=(7, 6), dpi=100)
         self.ax_nyquist = self.fig_nyquist.add_subplot(111)
@@ -2212,7 +2224,7 @@ class ControlExplorerApp(tk.Tk):
             ax.add_patch(rect)
             ax.text(center[0], center[1], text, ha="center", va="center", fontsize=8.8, color=edge)
 
-        def add_sum(center, sign=None, sign_pos="bottom"):
+        def add_sum(center, sign=None, sign_pos="bottom", sign_color=signal_color):
             ax.scatter(
                 [center[0]],
                 [center[1]],
@@ -2230,7 +2242,7 @@ class ControlExplorerApp(tk.Tk):
                     ha="center",
                     va="center",
                     fontsize=12,
-                    color=signal_color,
+                    color=sign_color,
                 )
             elif sign == "+" and sign_pos == "top":
                 ax.text(
@@ -2240,7 +2252,7 @@ class ControlExplorerApp(tk.Tk):
                     ha="center",
                     va="center",
                     fontsize=10,
-                    color=signal_color,
+                    color=sign_color,
                 )
 
         y_main = 0.64
@@ -2253,13 +2265,20 @@ class ControlExplorerApp(tk.Tk):
         x_sum_dy = 0.82
         x_out = 0.97
         delta_arrow = 0.005
+        disturbance_location = data.get("disturbance_location", self.DISTURBANCE_OUTPUT)
+        du_active = disturbance_location == self.DISTURBANCE_INPUT
+        dy_active = disturbance_location == self.DISTURBANCE_OUTPUT
+        du_color = signal_color if du_active else muted_color
+        dy_color = signal_color if dy_active else muted_color
+        du_lw = 1.2 if du_active else 1.0
+        dy_lw = 1.2 if dy_active else 1.0
 
         add_block((x_v, y_main), "V(s)" if data["prefilter_enabled"] else "V=1", data["prefilter_enabled"])
         add_sum((x_sum_e, y_main), sign="-", sign_pos="bottom")
         add_block((x_k, y_main), "K(s)" if data["controller_enabled"] else "K=1", data["controller_enabled"])
-        add_sum((x_sum_du, y_main), sign="+", sign_pos="top")
+        add_sum((x_sum_du, y_main), sign="+", sign_pos="top", sign_color=du_color)
         add_block((x_g, y_main), "G(s)", True)
-        add_sum((x_sum_dy, y_main), sign="+", sign_pos="top")
+        add_sum((x_sum_dy, y_main), sign="+", sign_pos="top", sign_color=dy_color)
 
         add_arrow((0.02, y_main), (x_v - block_width / 2, y_main), "$w$", text_offset=(-0.01, 0.06))
         add_arrow(
@@ -2305,6 +2324,8 @@ class ControlExplorerApp(tk.Tk):
             (x_sum_du, y_main - delta_arrow),
             r"$d_u$",
             text_offset=(0.026, 0.06),
+            color=du_color,
+            lw=du_lw,
             shrink_b=sum_marker_radius_pts,
         )
         add_arrow(
@@ -2312,6 +2333,8 @@ class ControlExplorerApp(tk.Tk):
             (x_sum_dy, y_main - delta_arrow),
             r"$d_y$",
             text_offset=(0.026, 0.06),
+            color=dy_color,
+            lw=dy_lw,
             shrink_b=sum_marker_radius_pts,
         )
 
