@@ -46,7 +46,7 @@ Falls `K_WOK` im Modell fehlt, fragt der Explorer, ob `K_WOK = 1` zum Parameterc
 
 Unter **Einstellungen > Wurzelortskurve** werden Verstärkungsbereich, Anzahl der Punkte, logarithmische Abtastung, gleiche Achsenskalierung, Dämpfungslinien, Konstruktionshilfen und die optionale Padé-Berücksichtigung der Totzeit eingestellt.
 
-Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Offene Pole und Nullstellen, Richtungspfeile, der markierte Entwurfswert, Stabilitätshinweise und Hover-Daten sind direkt im Plot verfügbar. Bei aktivierten Konstruktionshilfen werden Asymptoten, Wurzelschwerpunkt sowie Ein- und Austrittswinkel komplexer Nullstellen und Pole eingeblendet.
+Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Offene Pole und Nullstellen, Richtungspfeile, der markierte Entwurfswert, Stabilitätshinweise und Hover-Daten sind direkt im Plot verfügbar. Bei aktivierten Konstruktionshilfen werden Asymptoten mit Winkelangaben, Wurzelschwerpunkt, Ein- und Austrittswinkel mit Referenzlinie sowie Rechtwinkelmarken an realen Verzweigungs- und Vereinigungspunkten eingeblendet.
 
 ## Sprungantwort
 
