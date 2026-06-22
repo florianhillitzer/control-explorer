@@ -20,7 +20,7 @@ Mit **Aktualisieren** werden die Darstellungen für den aktiven Tab neu berechne
 
 Beispiele können über **Datei > Beispiel laden...** und **Datei > Beispiel speichern...** geöffnet oder abgelegt werden; der Standardordner ist `Control Explorer Examples` im Dokumente-Ordner. Ein Beispiel speichert das Modell und die dazugehörigen Analyseparameter, zum Beispiel Frequenzbereiche, Zeitbereich, Padé-Ordnung, Störsignal und gewählte Systempfade. Reine Anzeige- und Bedienvorlieben wie Grid, Auto-Update, Bode-Einheit oder Dämpfungslinien bleiben globale Programmeinstellungen.
 
-Über **Datei > Als MATLAB-Skript exportieren...** kann das aktuelle Modell als `.m`-Datei exportiert werden. Das erzeugte Skript verwendet numerische `tf(...)`-Modelle und rekonstruiert Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und Störaufschaltung in MATLAB mit der Control System Toolbox.
+Über **Datei > Als MATLAB-Skript exportieren...** kann das aktuelle Modell als `.m`-Datei exportiert werden. Das erzeugte Skript verwendet numerische `tf(...)`-Modelle und rekonstruiert Nyquist-Ortskurve, Bode-Diagramm, Wurzelortskurve, Sprungantwort und Störaufschaltung in MATLAB mit der Control System Toolbox. Sprungantwort und Störaufschaltung nutzen dabei MATLAB-native Totzeitmodelle; Padé wird im Export nur für die optionale Totzeit in der Wurzelortskurve verwendet.
 
 ## Hover und Zoom
 
