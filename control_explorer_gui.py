@@ -4138,7 +4138,7 @@ class ControlExplorerApp(tk.Tk):
         return wrapped
 
     @classmethod
-    def _root_locus_departure_angle(cls, pole, poles, zeros, tolerance=1e-8):
+    def _root_locus_departure_angle(cls, pole, poles, zeros, coefficient_angle_degrees=0.0, tolerance=1e-8):
         skipped_matching_pole = False
         zero_angles = [
             np.degrees(np.angle(pole - zero))
@@ -4152,10 +4152,12 @@ class ControlExplorerApp(tk.Tk):
                 continue
             if abs(pole - other_pole) > tolerance:
                 other_pole_angles.append(np.degrees(np.angle(pole - other_pole)))
-        return cls._wrap_angle_degrees(180.0 + sum(zero_angles) - sum(other_pole_angles))
+        return cls._wrap_angle_degrees(
+            180.0 + coefficient_angle_degrees + sum(zero_angles) - sum(other_pole_angles)
+        )
 
     @classmethod
-    def _root_locus_arrival_angle(cls, zero, poles, zeros, tolerance=1e-8):
+    def _root_locus_arrival_angle(cls, zero, poles, zeros, coefficient_angle_degrees=0.0, tolerance=1e-8):
         skipped_matching_zero = False
         pole_angles = [
             np.degrees(np.angle(zero - pole))
@@ -4169,7 +4171,9 @@ class ControlExplorerApp(tk.Tk):
                 continue
             if abs(zero - other_zero) > tolerance:
                 other_zero_angles.append(np.degrees(np.angle(zero - other_zero)))
-        return cls._wrap_angle_degrees(180.0 - sum(other_zero_angles) + sum(pole_angles))
+        return cls._wrap_angle_degrees(
+            180.0 - coefficient_angle_degrees - sum(other_zero_angles) + sum(pole_angles)
+        )
 
     @staticmethod
     def _ray_label_point_inside_axes(origin, angle, xlim, ylim, preferred_fraction=0.35):
@@ -4190,6 +4194,13 @@ class ControlExplorerApp(tk.Tk):
 
         distance = max(0.0, min(positive_limits)) * preferred_fraction
         return origin + distance * direction
+
+    @staticmethod
+    def _first_nonzero_coefficient(coefficients, tolerance=1e-12):
+        for coefficient in np.asarray(coefficients, dtype=complex).reshape(-1):
+            if abs(coefficient) > tolerance:
+                return coefficient
+        return 1.0
 
     def _draw_root_locus_reference_line(self, ax, point, color, line_length):
         ax.plot(
@@ -4249,7 +4260,7 @@ class ControlExplorerApp(tk.Tk):
             zorder=6,
         )
 
-    def _draw_root_locus_construction_guides(self, ax, open_poles, open_zeros):
+    def _draw_root_locus_construction_guides(self, ax, sys_root_locus, open_poles, open_zeros):
         if not self.root_locus_show_construction_var.get():
             return
 
@@ -4265,8 +4276,9 @@ class ControlExplorerApp(tk.Tk):
         x_span = max(xlim[1] - xlim[0], np.finfo(float).eps)
         y_span = max(ylim[1] - ylim[0], np.finfo(float).eps)
         reference_span = max(x_span, y_span, 1.0)
+        local_reference_span = max(min(x_span, y_span), 1.0)
         asymptote_length = 1.8 * reference_span
-        angle_arrow_length = 0.12 * reference_span
+        angle_arrow_length = 0.18 * local_reference_span
 
         n_poles = poles.size
         n_zeros = zeros.size
@@ -4274,6 +4286,15 @@ class ControlExplorerApp(tk.Tk):
         construction_color = "#6f6f6f"
         departure_color = "#8a4fb5"
         arrival_color = "#008c8c"
+        try:
+            num_coefficients, den_coefficients = self._tf_num_den_arrays(sys_root_locus)
+            numerator_lead = self._first_nonzero_coefficient(num_coefficients)
+            denominator_lead = self._first_nonzero_coefficient(den_coefficients)
+            coefficient_angle_degrees = float(np.degrees(np.angle(numerator_lead / denominator_lead)))
+            asymptote_base_angle = float(np.angle(-numerator_lead / denominator_lead))
+        except Exception:
+            coefficient_angle_degrees = 0.0
+            asymptote_base_angle = np.pi
 
         if asymptote_count > 0:
             centroid = (np.sum(poles) - np.sum(zeros)) / asymptote_count
@@ -4302,7 +4323,7 @@ class ControlExplorerApp(tk.Tk):
                 )
 
                 for index in range(asymptote_count):
-                    angle = (2 * index + 1) * np.pi / asymptote_count
+                    angle = (asymptote_base_angle + 2 * np.pi * index) / asymptote_count
                     endpoint = centroid + asymptote_length * complex(np.cos(angle), np.sin(angle))
                     ax.plot(
                         [centroid.real, endpoint.real],
@@ -4333,7 +4354,12 @@ class ControlExplorerApp(tk.Tk):
         for pole, multiplicity in self._group_pole_multiplicities(poles):
             if multiplicity > 1 or abs(pole.imag) <= 1e-7:
                 continue
-            angle = self._root_locus_departure_angle(pole, poles, zeros)
+            angle = self._root_locus_departure_angle(
+                pole,
+                poles,
+                zeros,
+                coefficient_angle_degrees=coefficient_angle_degrees,
+            )
             self._draw_root_locus_angle_marker(
                 ax,
                 pole,
@@ -4350,7 +4376,12 @@ class ControlExplorerApp(tk.Tk):
         for zero, multiplicity in self._group_pole_multiplicities(zeros):
             if multiplicity > 1 or abs(zero.imag) <= 1e-7:
                 continue
-            angle = self._root_locus_arrival_angle(zero, poles, zeros)
+            angle = self._root_locus_arrival_angle(
+                zero,
+                poles,
+                zeros,
+                coefficient_angle_degrees=coefficient_angle_degrees,
+            )
             self._draw_root_locus_angle_marker(
                 ax,
                 zero,
@@ -4611,7 +4642,7 @@ class ControlExplorerApp(tk.Tk):
         ax.grid(self.grid_var.get(), which="both")
         x_span, y_span = self._set_root_locus_limits(ax, loci, open_poles, open_zeros)
         self._draw_root_locus_damping_grid(ax)
-        self._draw_root_locus_construction_guides(ax, open_poles, open_zeros)
+        self._draw_root_locus_construction_guides(ax, sys_root_locus, open_poles, open_zeros)
 
         span_ratio = max(x_span, y_span) / max(min(x_span, y_span), np.finfo(float).eps)
         use_equal_axis = self.root_locus_equal_axis_var.get() and span_ratio <= 8.0
