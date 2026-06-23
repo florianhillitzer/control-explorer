@@ -1083,8 +1083,8 @@ class ControlExplorerApp(tk.Tk):
             "Falls K_WOK im Modell fehlt, kann er per Dialog ergänzt werden. Ein Klick auf die Kurve übernimmt "
             "den passenden Wert in K_WOK; gespeicherte Beispiele werden wieder mit K_WOK = 1 abgelegt. "
             "Mehrfachpole werden mit ihrer Vielfachheit gekennzeichnet. Totzeit kann optional über Padé "
-            "approximiert werden. Konstruktionshilfen blenden Asymptoten mit Winkelangaben, Wurzelschwerpunkt, "
-            "Ein- und Austrittswinkel mit Referenzlinie sowie Rechtwinkelmarken an Verzweigungen/Vereinigungen ein.\n\n"
+            "approximiert werden. Konstruktionshilfen blenden Asymptoten mit Winkelangaben, Wurzelschwerpunkt "
+            "sowie Ein- und Austrittswinkel mit Referenzlinie ein.\n\n"
             "7. Sprungantwort\n"
             "Die Sprungantwort nutzt die Zeitachse, den Sprungfaktor und die Padé-Ordnung aus Einstellungen > Sprung. "
             "Bei aktivem Vorfilter wird für die Führungsantwort V(s)L(s)/(1+L(s)) verwendet.\n\n"
@@ -4191,64 +4191,6 @@ class ControlExplorerApp(tk.Tk):
         distance = max(0.0, min(positive_limits)) * preferred_fraction
         return origin + distance * direction
 
-    @staticmethod
-    def _root_locus_real_break_points(poles, zeros, xlim, tolerance=1e-7):
-        poles = np.asarray(poles, dtype=complex).reshape(-1)
-        zeros = np.asarray(zeros, dtype=complex).reshape(-1)
-        poles = poles[np.isfinite(poles.real) & np.isfinite(poles.imag)]
-        zeros = zeros[np.isfinite(zeros.real) & np.isfinite(zeros.imag)]
-        if poles.size < 2:
-            return []
-
-        den_poly = np.poly(poles)
-        num_poly = np.poly(zeros) if zeros.size else np.array([1.0])
-        derivative_poly = np.polysub(
-            np.polymul(np.polyder(den_poly), num_poly),
-            np.polymul(den_poly, np.polyder(num_poly)),
-        )
-        if derivative_poly.size <= 1 or np.all(np.abs(derivative_poly) < tolerance):
-            return []
-
-        real_singularities = [
-            value.real
-            for value in np.concatenate((poles, zeros))
-            if abs(value.imag) <= tolerance
-        ]
-        candidates = []
-        for root in np.roots(derivative_poly):
-            if not np.isfinite(root.real) or not np.isfinite(root.imag):
-                continue
-            if abs(root.imag) > tolerance * max(1.0, abs(root.real)):
-                continue
-            x_value = float(root.real)
-            if x_value < xlim[0] or x_value > xlim[1]:
-                continue
-            if any(abs(x_value - singularity) <= 50 * tolerance for singularity in real_singularities):
-                continue
-
-            right_count = sum(
-                1
-                for value in np.concatenate((poles, zeros))
-                if abs(value.imag) <= tolerance and value.real > x_value + tolerance
-            )
-            if right_count % 2 == 0:
-                continue
-
-            numerator = np.polyval(den_poly, x_value)
-            denominator = np.polyval(num_poly, x_value)
-            if abs(denominator) <= tolerance:
-                continue
-            gain = -numerator / denominator
-            if abs(np.imag(gain)) > tolerance * max(1.0, abs(np.real(gain))):
-                continue
-            if np.real(gain) < -tolerance:
-                continue
-
-            if not any(abs(x_value - existing) <= 100 * tolerance for existing in candidates):
-                candidates.append(x_value)
-
-        return sorted(candidates)
-
     def _draw_root_locus_reference_line(self, ax, point, color, line_length):
         ax.plot(
             [point.real, point.real + line_length],
@@ -4258,23 +4200,6 @@ class ControlExplorerApp(tk.Tk):
             color=color,
             #alpha=0.75,
             zorder=3,
-        )
-
-    def _draw_root_locus_right_angle_marker(self, ax, x_value, y_value, size, color, legend_label=None):
-        ax.plot(
-            [x_value, x_value + size, x_value + size],
-            [y_value, y_value, y_value + size],
-            color=color,
-            linewidth=1.2,
-            zorder=6,
-            label=legend_label,
-        )
-        ax.plot(
-            [x_value, x_value + size, x_value + size],
-            [y_value, y_value, y_value - size],
-            color=color,
-            linewidth=1.2,
-            zorder=6,
         )
 
     def _draw_root_locus_angle_marker(
@@ -4342,7 +4267,6 @@ class ControlExplorerApp(tk.Tk):
         reference_span = max(x_span, y_span, 1.0)
         asymptote_length = 1.8 * reference_span
         angle_arrow_length = 0.12 * reference_span
-        right_angle_size = 0.035 * reference_span
 
         n_poles = poles.size
         n_zeros = zeros.size
@@ -4350,7 +4274,6 @@ class ControlExplorerApp(tk.Tk):
         construction_color = "#6f6f6f"
         departure_color = "#8a4fb5"
         arrival_color = "#008c8c"
-        break_point_color = "#c77c00"
 
         if asymptote_count > 0:
             centroid = (np.sum(poles) - np.sum(zeros)) / asymptote_count
@@ -4405,38 +4328,6 @@ class ControlExplorerApp(tk.Tk):
                         clip_on=True,
                         zorder=2,
                     )
-
-        break_label_used = False
-        for x_value in self._root_locus_real_break_points(poles, zeros, xlim):
-            self._draw_root_locus_right_angle_marker(
-                ax,
-                x_value,
-                0.0,
-                right_angle_size,
-                break_point_color,
-                legend_label="Verzweigung/Vereinigung" if not break_label_used else None,
-            )
-            ax.plot(
-                x_value,
-                0.0,
-                marker="s",
-                markersize=4,
-                color=break_point_color,
-                linestyle="none",
-                zorder=7,
-            )
-            ax.text(
-                x_value,
-                1.45 * right_angle_size,
-                r"$90^\circ$",
-                color=break_point_color,
-                fontsize=7.5,
-                ha="center",
-                va="bottom",
-                clip_on=True,
-                zorder=7,
-            )
-            break_label_used = True
 
         departure_label_used = False
         for pole, multiplicity in self._group_pole_multiplicities(poles):
