@@ -2355,8 +2355,12 @@ class ControlExplorerApp(tk.Tk):
         x_out = 0.97
         delta_arrow = 0.005
         disturbance_location = data.get("disturbance_location", self.DISTURBANCE_OUTPUT)
-        du_active = disturbance_location == self.DISTURBANCE_INPUT
-        dy_active = disturbance_location == self.DISTURBANCE_OUTPUT
+        try:
+            disturbance_tab_active = self.notebook.select() == str(self.tab_disturbance)
+        except (AttributeError, tk.TclError):
+            disturbance_tab_active = False
+        du_active = disturbance_tab_active and disturbance_location == self.DISTURBANCE_INPUT
+        dy_active = disturbance_tab_active and disturbance_location == self.DISTURBANCE_OUTPUT
         du_color = signal_color if du_active else muted_color
         dy_color = signal_color if dy_active else muted_color
         du_lw = 1.2 if du_active else 1.0
