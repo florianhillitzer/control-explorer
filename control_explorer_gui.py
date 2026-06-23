@@ -290,6 +290,72 @@ class ControlExplorerApp(tk.Tk):
         except (AttributeError, OSError, tk.TclError):
             pass
 
+    def _current_monitor_workarea(self):
+        try:
+            self.update_idletasks()
+            center_x = int(self.winfo_rootx() + max(1, self.winfo_width()) / 2)
+            center_y = int(self.winfo_rooty() + max(1, self.winfo_height()) / 2)
+        except tk.TclError:
+            center_x = 0
+            center_y = 0
+
+        if os.name == "nt":
+            try:
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [
+                        ("cbSize", wintypes.DWORD),
+                        ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD),
+                    ]
+
+                user32 = ctypes.windll.user32
+                user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+                user32.MonitorFromPoint.restype = wintypes.HANDLE
+                user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+                user32.GetMonitorInfoW.restype = wintypes.BOOL
+
+                monitor = user32.MonitorFromPoint(wintypes.POINT(center_x, center_y), 2)
+                monitor_info = MONITORINFO()
+                monitor_info.cbSize = ctypes.sizeof(MONITORINFO)
+                if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(monitor_info)):
+                    work_area = monitor_info.rcWork
+                    return work_area.left, work_area.top, work_area.right, work_area.bottom
+            except (AttributeError, OSError, tk.TclError):
+                pass
+
+        try:
+            left = int(self.winfo_vrootx())
+            top = int(self.winfo_vrooty())
+            width = int(self.winfo_vrootwidth())
+            height = int(self.winfo_vrootheight())
+            if width > 1 and height > 1:
+                return left, top, left + width, top + height
+        except tk.TclError:
+            pass
+
+        return 0, 0, int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+
+    def _place_child_window_on_current_monitor(self, dialog, width=None, height=None):
+        try:
+            self.update_idletasks()
+            dialog.update_idletasks()
+            if width is None:
+                width = max(dialog.winfo_width(), dialog.winfo_reqwidth())
+            if height is None:
+                height = max(dialog.winfo_height(), dialog.winfo_reqheight())
+
+            left, top, right, bottom = self._current_monitor_workarea()
+            monitor_width = max(1, right - left)
+            monitor_height = max(1, bottom - top)
+            width = min(max(1, int(width)), max(1, monitor_width - 40))
+            height = min(max(1, int(height)), max(1, monitor_height - 40))
+            x = left + max(0, (monitor_width - width) // 2)
+            y = top + max(0, (monitor_height - height) // 2)
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+        except tk.TclError:
+            pass
+
     # ------------------------------------------------------------------
     # GUI construction
     # ------------------------------------------------------------------
@@ -512,6 +578,7 @@ class ControlExplorerApp(tk.Tk):
 
     def _open_settings_window(self, initial_tab=None):
         if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._place_child_window_on_current_monitor(self._settings_window)
             self._settings_window.lift()
             self._settings_window.focus_force()
             if initial_tab is not None:
@@ -525,10 +592,10 @@ class ControlExplorerApp(tk.Tk):
             return
 
         dialog = tk.Toplevel(self)
+        dialog.withdraw()
         self._settings_window = dialog
         dialog.title("Einstellungen")
         dialog.transient(self)
-        dialog.geometry("760x640")
         dialog.minsize(700, 560)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
@@ -584,6 +651,9 @@ class ControlExplorerApp(tk.Tk):
         ).grid(row=0, column=0, sticky="w")
         ttk.Button(button_frame, text="Werkseinstellungen", command=self.reset_settings).grid(row=0, column=1, padx=6)
         ttk.Button(button_frame, text="Schließen", command=lambda: self._close_settings_window(dialog)).grid(row=0, column=2, sticky="e")
+
+        self._place_child_window_on_current_monitor(dialog, 760, 640)
+        dialog.deiconify()
 
     def _close_settings_window(self, dialog):
         if dialog.winfo_exists():
@@ -805,9 +875,9 @@ class ControlExplorerApp(tk.Tk):
 
     def _open_markdown_window(self, title, markdown_path, fallback_markdown):
         dialog = tk.Toplevel(self)
+        dialog.withdraw()
         dialog.title(title)
         dialog.transient(self)
-        dialog.geometry("920x760")
         dialog.minsize(760, 560)
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(0, weight=1)
@@ -824,6 +894,8 @@ class ControlExplorerApp(tk.Tk):
             padx=10,
             pady=(0, 10),
         )
+        self._place_child_window_on_current_monitor(dialog, 920, 760)
+        dialog.deiconify()
 
     def _read_markdown_resource(self, filename, fallback_text):
         path = self._resource_path(filename)
