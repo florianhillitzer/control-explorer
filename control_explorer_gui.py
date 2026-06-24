@@ -3528,21 +3528,6 @@ class ControlExplorerApp(tk.Tk):
         active_tab = self.notebook.index(self.notebook.select())
         if active_tab == 2 and force_root_locus_prompt:
             self._root_locus_prompt_declined_signature = None
-        if active_tab == 2 and not self._ensure_root_locus_gain_available(prompt=True):
-            self._clear_hover_annotations(redraw=True)
-            self.ax_root_locus.clear()
-            self.ax_root_locus.axis("off")
-            self.ax_root_locus.text(
-                0.5,
-                0.5,
-                "Für die Wurzelortskurve wird K_WOK benötigt.",
-                ha="center",
-                va="center",
-                transform=self.ax_root_locus.transAxes,
-                fontsize=11,
-            )
-            self.canvas_root_locus.draw_idle()
-            return
 
         self._clear_hover_annotations(redraw=True)
         self._is_updating = True
@@ -3551,6 +3536,23 @@ class ControlExplorerApp(tk.Tk):
 
         try:
             data = self._parse_user_input()
+            if active_tab == 2 and not data["root_locus_gain_parameter"]:
+                if not self._ensure_root_locus_gain_available(prompt=True):
+                    self.ax_root_locus.clear()
+                    self.ax_root_locus.axis("off")
+                    self.ax_root_locus.text(
+                        0.5,
+                        0.5,
+                        "Für die Wurzelortskurve wird K_WOK benötigt.",
+                        ha="center",
+                        va="center",
+                        transform=self.ax_root_locus.transAxes,
+                        fontsize=11,
+                    )
+                    self.canvas_root_locus.draw_idle()
+                    return
+                data = self._parse_user_input()
+
             self._update_root_locus_gain_parameter_controls(
                 data["root_locus_gain_candidates"],
                 data["root_locus_gain_parameter"],
