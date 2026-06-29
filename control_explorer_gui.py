@@ -3916,19 +3916,17 @@ class ControlExplorerApp(tk.Tk):
 
         phase_margin = None
         if phase_margin_candidates:
-            positive = [c for c in phase_margin_candidates if c["phase_margin_deg"] >= 0]
-            if positive:
-                phase_margin = min(positive, key=lambda c: c["phase_margin_deg"])
-            else:
-                phase_margin = max(phase_margin_candidates, key=lambda c: c["phase_margin_deg"])
+            phase_margin = min(
+                phase_margin_candidates,
+                key=lambda c: abs(c["phase_margin_deg"]),
+            )
 
         gain_margin = None
         if gain_margin_candidates:
-            stable_side = [c for c in gain_margin_candidates if c["gain_margin"] >= 1.0]
-            if stable_side:
-                gain_margin = min(stable_side, key=lambda c: c["gain_margin"])
-            else:
-                gain_margin = max(gain_margin_candidates, key=lambda c: c["gain_margin"])
+            gain_margin = min(
+                gain_margin_candidates,
+                key=lambda c: abs(c["gain_margin_db"]),
+            )
 
         return {
             "gain_margin": gain_margin,
@@ -4016,6 +4014,12 @@ class ControlExplorerApp(tk.Tk):
                 xy=(plot_wp, mag_db_at_wp),
                 fontsize=9,
             )
+            if gm["gain_margin_db"] < 0.0:
+                self._control_warnings.append(
+                    "Bode: keine positive Amplitudenreserve; "
+                    f"der nächste Phasendurchtritt liegt bei A_R = {gm['gain_margin']:.4g} "
+                    f"({gm['gain_margin_db']:.3g} dB)."
+                )
 
         pm = margins["phase_margin"]
         if pm is not None:
@@ -4053,6 +4057,11 @@ class ControlExplorerApp(tk.Tk):
                 xy=(plot_wc, phase_at_wc),
                 fontsize=9,
             )
+            if pm["phase_margin_deg"] < 0.0:
+                self._control_warnings.append(
+                    "Bode: keine positive Phasenreserve; "
+                    f"am 0-dB-Durchtritt ergibt sich φ_R = {pm['phase_margin_deg']:.3g}°."
+                )
 
         if pm is None:
             self._control_warnings.append(
