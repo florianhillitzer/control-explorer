@@ -3611,9 +3611,9 @@ class ControlExplorerApp(tk.Tk):
                 sys_root_locus = None
 
             if active_tab == 0:
-                self._plot_nyquist(omega_out, H_freq, data["markers"])
+                self._plot_nyquist(omega_out, H_freq, data["markers"], data=data)
             elif active_tab == 1:
-                self._plot_bode(omega_out, H_freq, L, data["sys_rational"])
+                self._plot_bode(omega_out, H_freq, L, data["sys_rational"], data["delay"])
             elif active_tab == 2:
                 self._plot_root_locus(
                     sys_root_locus,
@@ -3643,7 +3643,7 @@ class ControlExplorerApp(tk.Tk):
         finally:
             self._is_updating = False
 
-    def _plot_nyquist(self, omega, H, markers):
+    def _plot_nyquist(self, omega, H, markers, data=None):
         ax = self.ax_nyquist
         self._clear_hover_for_axes(ax)
         ax.clear()
@@ -3744,8 +3744,44 @@ class ControlExplorerApp(tk.Tk):
                     f"Nyquist/Ortskurve: {omitted_points} nicht-endliche Punkte wurden ausgelassen."
                 )
 
+        nyquist_trim_start = False
+        nyquist_trim_end = False
+        if data is not None and self._is_open_loop_selection(selected):
+            nyquist_trim_start = self._count_origin_integrators(data["sys_rational"]) > 0
+            high_frequency_limit = self._rational_high_frequency_limit(data["sys_rational"])
+            nyquist_trim_end = high_frequency_limit is np.inf or high_frequency_limit == np.inf
+
+        view_curves = [
+            self._trim_divergent_curve_ends(
+                plot_H,
+                trim_start=nyquist_trim_start,
+                trim_end=nyquist_trim_end,
+            )
+        ]
+        if self.show_negative_freq_var.get():
+            view_curves.append(
+                self._trim_divergent_curve_ends(
+                    plot_H.real - 1j * plot_H.imag,
+                    trim_start=nyquist_trim_start,
+                    trim_end=nyquist_trim_end,
+                )
+            )
+        view_points = np.concatenate([curve for curve in view_curves if curve.size])
+        if self.show_critical_point_var.get() and self._is_open_loop_selection(selected) and not normalized:
+            view_points = np.append(view_points, -1.0 + 0.0j)
+
+        xlim = self._limits_for_visible_values(view_points.real)
+        ylim = self._limits_for_visible_values(view_points.imag)
         if self.equal_axis_var.get():
-            ax.axis("equal")
+            x_center = 0.5 * (xlim[0] + xlim[1])
+            y_center = 0.5 * (ylim[0] + ylim[1])
+            half_span = 0.5 * max(xlim[1] - xlim[0], ylim[1] - ylim[0])
+            ax.set_xlim(x_center - half_span, x_center + half_span)
+            ax.set_ylim(y_center - half_span, y_center + half_span)
+            ax.set_aspect("equal", adjustable="box")
+        else:
+            ax.set_xlim(*xlim)
+            ax.set_ylim(*ylim)
 
         title = "Normierte Nyquist-Ortskurve" if normalized else "Nyquist-Ortskurve"
         if not self._is_open_loop_selection(selected) and self.show_critical_point_var.get():
@@ -3791,6 +3827,91 @@ class ControlExplorerApp(tk.Tk):
                 linestyle="None",
                 color="black",
             )
+
+    @staticmethod
+    def _finite_complex_points(points):
+        points = np.asarray(points, dtype=complex).reshape(-1)
+        finite = np.isfinite(points.real) & np.isfinite(points.imag)
+        return points[finite]
+
+    @classmethod
+    def _trim_divergent_curve_ends(
+        cls,
+        points,
+        min_points=8,
+        dominance_factor=10.0,
+        trim_start=True,
+        trim_end=True,
+    ):
+        points = cls._finite_complex_points(points)
+        if points.size < min_points:
+            return points
+
+        magnitudes = np.abs(points)
+        positive_magnitudes = magnitudes[magnitudes > np.finfo(float).eps]
+        if positive_magnitudes.size == 0:
+            return points
+
+        reference_scale = float(np.nanmin(positive_magnitudes))
+        if not np.isfinite(reference_scale) or reference_scale <= np.finfo(float).eps:
+            reference_scale = float(np.nanmedian(positive_magnitudes))
+        if not np.isfinite(reference_scale) or reference_scale <= np.finfo(float).eps:
+            return points
+
+        threshold = max(10.0, dominance_factor * reference_scale)
+        start = 0
+        end = points.size
+
+        while trim_start and start + min_points < end and magnitudes[start] > threshold and magnitudes[start] > magnitudes[start + 1]:
+            start += 1
+        while trim_end and end - start > min_points and magnitudes[end - 1] > threshold and magnitudes[end - 1] > magnitudes[end - 2]:
+            end -= 1
+
+        return points[start:end]
+
+    @staticmethod
+    def _limits_for_visible_values(values, include_zero=True, padding_fraction=0.08, minimum_padding=0.05):
+        values = np.asarray(values, dtype=float).reshape(-1)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return -1.0, 1.0
+
+        lower = float(np.min(values))
+        upper = float(np.max(values))
+        if include_zero:
+            lower = min(lower, 0.0)
+            upper = max(upper, 0.0)
+
+        span = upper - lower
+        if not np.isfinite(span):
+            return -1.0, 1.0
+        if span <= np.finfo(float).eps:
+            center = 0.0 if include_zero else 0.5 * (lower + upper)
+            half_span = max(1.0, abs(center) * 0.2)
+            return center - half_span, center + half_span
+
+        padding = max(padding_fraction * span, minimum_padding)
+        return lower - padding, upper + padding
+
+    @staticmethod
+    def _set_large_phase_default_view(ax, phase_deg):
+        phase = np.asarray(phase_deg, dtype=float).reshape(-1)
+        phase = phase[np.isfinite(phase)]
+        if phase.size < 2:
+            return None
+
+        phase_span = float(np.max(phase) - np.min(phase))
+        if phase_span <= 420.0:
+            return None
+
+        start_phase = float(phase[0])
+        end_phase = float(phase[-1])
+        direction = -1.0 if end_phase < start_phase else 1.0
+        lower = start_phase if direction > 0.0 else start_phase - 360.0
+        upper = start_phase + 360.0 if direction > 0.0 else start_phase
+
+        ax.set_ylim(lower, upper)
+        return lower, upper
 
     def _interpolate_at_log_frequency(self, omega, values, omega_target):
         log_w = np.log10(np.asarray(omega, dtype=float))
@@ -3978,12 +4099,19 @@ class ControlExplorerApp(tk.Tk):
         ax_phase.axhline(-180.0, linestyle=":", linewidth=1.0, color="black", label=r"$-180^\circ$")
 
         gm = margins["gain_margin"]
+        pm = margins["phase_margin"]
+        margin_frequencies_overlap = (
+            gm is not None
+            and pm is not None
+            and np.isclose(gm["omega"], pm["omega"], rtol=1e-4, atol=0.0)
+        )
         if gm is not None:
             wp = gm["omega"]
             plot_wp = self._omega_to_bode_frequency(wp)
             mag_db_at_wp = gm["mag_db"]
-            ax_mag.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
-            ax_phase.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
+            if not margin_frequencies_overlap:
+                ax_mag.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
+                ax_phase.axvline(plot_wp, linestyle=":", linewidth=1.0, color="black")
             ax_mag.plot(
                 plot_wp,
                 mag_db_at_wp,
@@ -3998,7 +4126,7 @@ class ControlExplorerApp(tk.Tk):
                 markersize=5,
                 label=gain_frequency_label,
             )
-            ax_mag.vlines(plot_wp, mag_db_at_wp, 0.0, linestyle=":", linewidth=1.2, color="black")
+            ax_mag.vlines(plot_wp, mag_db_at_wp, 0.0, linestyle="-", linewidth=2, color="orange")
             gain_frequency_text = (
                 rf"$f_\pi={plot_wp:.3g}\,\mathrm{{Hz}}$"
                 if use_hz
@@ -4021,7 +4149,6 @@ class ControlExplorerApp(tk.Tk):
                     f"({gm['gain_margin_db']:.3g} dB)."
                 )
 
-        pm = margins["phase_margin"]
         if pm is not None:
             wc = pm["omega"]
             plot_wc = self._omega_to_bode_frequency(wc)
@@ -4043,7 +4170,7 @@ class ControlExplorerApp(tk.Tk):
                 markersize=5,
                 label=phase_frequency_label,
             )
-            ax_phase.vlines(plot_wc, -180.0, phase_at_wc, linestyle="--", linewidth=1.2, color="black")
+            ax_phase.vlines(plot_wc, -180.0, phase_at_wc, linestyle="-", linewidth=2, color="green")
             phase_frequency_text = (
                 rf"$f_c={plot_wc:.3g}\,\mathrm{{Hz}}$"
                 if use_hz
@@ -4078,7 +4205,7 @@ class ControlExplorerApp(tk.Tk):
                 "Bode: Keine Durchtrittsfrequenz im dargestellten Frequenzbereich gefunden.",
             )
 
-    def _plot_bode(self, omega, H, L_open=None, sys_rational=None):
+    def _plot_bode(self, omega, H, L_open=None, sys_rational=None, delay=0.0):
         ax_mag = self.ax_mag
         ax_phase = self.ax_phase
 
@@ -4124,6 +4251,15 @@ class ControlExplorerApp(tk.Tk):
                     "Bode: Reserven werden für den offenen Kreis L(jω) bestimmt.\n"
                     "Bitte im Bode-Tab den offenen Kreis auswählen.",
                 )
+
+        phase_view = self._set_large_phase_default_view(ax_phase, phase_deg)
+        if phase_view is not None:
+            lower, upper = phase_view
+            reason = "wegen Totzeit " if delay > 0 else ""
+            self._control_warnings.append(
+                f"Bode: Der Phasengang umfasst {reason}mehr als 360°; "
+                f"die Startansicht zeigt {lower:.4g}° bis {upper:.4g}°."
+            )
 
         if ax_mag.get_legend_handles_labels()[0]:
             ax_mag.legend(loc="best", fontsize=8)
@@ -4486,11 +4622,25 @@ class ControlExplorerApp(tk.Tk):
 
     @staticmethod
     def _set_root_locus_limits(ax, loci, open_poles, open_zeros):
-        values = [np.asarray(loci, dtype=complex).reshape(-1)]
+        values = []
+        loci = np.asarray(loci, dtype=complex)
+        if loci.ndim == 2:
+            for branch in range(loci.shape[1]):
+                branch_points = ControlExplorerApp._trim_divergent_curve_ends(
+                    loci[:, branch],
+                    trim_start=False,
+                    trim_end=True,
+                )
+                if branch_points.size:
+                    values.append(branch_points)
+        else:
+            values.append(ControlExplorerApp._trim_divergent_curve_ends(loci, trim_start=False, trim_end=True))
         if open_poles.size:
             values.append(np.asarray(open_poles, dtype=complex).reshape(-1))
         if open_zeros.size:
             values.append(np.asarray(open_zeros, dtype=complex).reshape(-1))
+        if not values:
+            values.append(np.asarray(loci, dtype=complex).reshape(-1))
 
         points = np.concatenate(values)
         finite = np.isfinite(points.real) & np.isfinite(points.imag)
@@ -4498,19 +4648,15 @@ class ControlExplorerApp(tk.Tk):
         if not points.size:
             raise ValueError("Die Wurzelortskurve enthält keine endlichen Punkte.")
 
-        x_min = min(float(np.min(points.real)), 0.0)
-        x_max = max(float(np.max(points.real)), 0.0)
-        y_min = min(float(np.min(points.imag)), 0.0)
-        y_max = max(float(np.max(points.imag)), 0.0)
+        xlim = ControlExplorerApp._limits_for_visible_values(points.real)
+        ylim = ControlExplorerApp._limits_for_visible_values(points.imag)
+        y_half_span = max(abs(ylim[0]), abs(ylim[1]), 1.0)
+        ylim = (-y_half_span, y_half_span)
+        x_span = xlim[1] - xlim[0]
+        y_span = ylim[1] - ylim[0]
 
-        x_span = x_max - x_min
-        y_span = y_max - y_min
-        reference_span = max(x_span, y_span, 1.0)
-        x_padding = 0.08 * max(x_span, 0.1 * reference_span)
-        y_padding = 0.08 * max(y_span, 0.1 * reference_span)
-
-        ax.set_xlim(x_min - x_padding, x_max + x_padding)
-        ax.set_ylim(y_min - y_padding, y_max + y_padding)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
         return x_span, y_span
 
     @staticmethod
@@ -4634,12 +4780,36 @@ class ControlExplorerApp(tk.Tk):
         ax.clear()
         self._root_locus_click_data = None
 
-        response = self._call_control(
-            "root_locus_map",
-            ct.root_locus_map,
-            sys_root_locus,
-            gains=np.asarray(gains, dtype=float),
-        )
+        num, den = self._tf_num_den_arrays(sys_root_locus)
+        numerator_degree = num.size - 1
+        denominator_degree = den.size - 1
+        if numerator_degree > denominator_degree:
+            raise ValueError(
+                "Wurzelortskurve nicht berechenbar: Der offene Kreis ist uneigentlich "
+                f"(Zählergrad {numerator_degree} > Nennergrad {denominator_degree}). "
+                "Bei einem idealen D-Anteil oder einer idealen Vorhaltewirkung besitzt das Modell mehr Nullstellen "
+                "als Pole; dadurch ändert sich die Anzahl der geschlossenen Pole mit K und es gibt kein konsistentes "
+                "Polraster für die WOK. Verwende für die WOK ein realisierbares Modell, z. B. einen gefilterten "
+                "D-Anteil  T_D*s/(T_f*s + 1), oder ergänze die fehlende Streckendynamik."
+            )
+
+        try:
+            response = self._call_control(
+                "root_locus_map",
+                ct.root_locus_map,
+                sys_root_locus,
+                gains=np.asarray(gains, dtype=float),
+            )
+        except ValueError as exc:
+            if "input array dimensions" in str(exc) or "concatenation axis" in str(exc):
+                raise ValueError(
+                    "Wurzelortskurve nicht berechenbar: Die Anzahl der geschlossenen Pole ist im "
+                    "abgetasteten K-Bereich nicht konstant. Ursache ist meist ein uneigentliches "
+                    "oder numerisch nicht konsistentes offenes Kreismodell, häufig durch ideale "
+                    "D-Anteile ohne Filter. Verwende für die WOK ein realisierbares Modell mit "
+                    "mindestens ebenso vielen Polen wie Nullstellen."
+                ) from exc
+            raise
         loci = np.asarray(response.loci, dtype=complex)
         locus_gains = np.asarray(response.gains, dtype=float)
         if loci.ndim != 2 or loci.shape[0] != locus_gains.size:
