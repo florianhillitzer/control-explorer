@@ -139,10 +139,15 @@ class ControlExplorerApp(tk.Tk):
     )
     EXAMPLE_SETTING_KEYS = frozenset(set(DEFAULT_SETTINGS) - GLOBAL_SETTING_KEYS - RUNTIME_SETTING_KEYS)
 
-    def __init__(self):
+    def __init__(self, show_startup_splash=True):
         self._set_windows_app_id()
         super().__init__(baseName="control-explorer", className="ControlExplorer")
+        self.withdraw()
         self._native_icon_handles = []
+        self._startup_splash = None
+        self._startup_splash_label = None
+        if show_startup_splash:
+            self._show_startup_splash()
 
         self._after_id = None
         self._is_updating = False
@@ -167,14 +172,17 @@ class ControlExplorerApp(tk.Tk):
         self.current_example_path = None
         self.current_example_var = tk.StringVar(value="Aktuelles Beispiel: Standard")
 
+        self._set_startup_splash_text("Oberfläche wird vorbereitet...")
         self.title(f"{self.APP_NAME} {self.app_version} - Nyquist, Bode, Wurzelortskurve, Sprungantwort, Störaufschaltung")
         self._set_window_icon()
         self.geometry("1600x1000")
         self.minsize(1050, 650)
 
+        self._set_startup_splash_text("Einstellungen werden geladen...")
         self._create_variables()
         self._load_settings()
         self._create_menu()
+        self._set_startup_splash_text("Diagramme und Werkzeuge werden aufgebaut...")
         self._create_layout()
         self._bind_events()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -183,7 +191,7 @@ class ControlExplorerApp(tk.Tk):
 
         # wichtig: nach GUI-Aufbau Icon nochmal setzen und dann anzeigen
         self.after(80, self._set_window_icon)
-        self.after(120, self.deiconify)
+        self.after(120, self._finish_startup)
 
     def _resource_path(self, filename):
         candidates = []
@@ -215,6 +223,65 @@ class ControlExplorerApp(tk.Tk):
         except OSError:
             version = ""
         return version or self.APP_VERSION_FALLBACK
+
+    def _show_startup_splash(self):
+        try:
+            splash = tk.Toplevel(self)
+            splash.title("Control Explorer startet")
+            splash.resizable(False, False)
+            splash.transient(self)
+            splash.overrideredirect(True)
+
+            frame = ttk.Frame(splash, padding=(24, 18))
+            frame.grid(row=0, column=0, sticky="nsew")
+            ttk.Label(frame, text="Control Explorer", font=("TkDefaultFont", 14, "bold")).grid(
+                row=0,
+                column=0,
+                sticky="w",
+            )
+            self._startup_splash_label = ttk.Label(frame, text="Anwendung wird gestartet...")
+            self._startup_splash_label.grid(row=1, column=0, sticky="w", pady=(10, 0))
+            progress = ttk.Progressbar(frame, mode="indeterminate", length=260)
+            progress.grid(row=2, column=0, sticky="ew", pady=(14, 0))
+            progress.start(12)
+
+            splash.update_idletasks()
+            width = max(340, splash.winfo_reqwidth())
+            height = max(120, splash.winfo_reqheight())
+            x = int((splash.winfo_screenwidth() - width) / 2)
+            y = int((splash.winfo_screenheight() - height) / 2)
+            splash.geometry(f"{width}x{height}+{x}+{y}")
+            splash.deiconify()
+            splash.lift()
+            splash.update()
+            self._startup_splash = splash
+        except tk.TclError:
+            self._startup_splash = None
+            self._startup_splash_label = None
+
+    def _set_startup_splash_text(self, text):
+        splash = getattr(self, "_startup_splash", None)
+        label = getattr(self, "_startup_splash_label", None)
+        if splash is None or label is None:
+            return
+        try:
+            label.configure(text=text)
+            splash.update_idletasks()
+            splash.update()
+        except tk.TclError:
+            pass
+
+    def _finish_startup(self):
+        splash = getattr(self, "_startup_splash", None)
+        if splash is not None:
+            try:
+                splash.destroy()
+            except tk.TclError:
+                pass
+        self._startup_splash = None
+        self._startup_splash_label = None
+        self.deiconify()
+        self.lift()
 
     @staticmethod
     def _set_windows_app_id():

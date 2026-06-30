@@ -10,7 +10,7 @@ hiddenimports = control_hiddenimports + [
 ]
 
 a = Analysis(
-    ["control_explorer_gui.py"],
+    ["control_explorer_launcher.py"],
     pathex=[],
     binaries=control_binaries,
     datas=[
